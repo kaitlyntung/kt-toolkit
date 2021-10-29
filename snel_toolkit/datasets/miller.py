@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 import scipy
+import pathlib
 from scipy.io import loadmat
 import matplotlib.pyplot as plt
 
@@ -965,3 +966,102 @@ class XDSDataset(BaseDataset):
         onset_times = td.loc[onset_ixs].clock_time
         onset_times.index = onset_ixs.index
         self.trial_info[onset_name] = onset_times
+
+
+class SimpleJangoDataset(BaseDataset):
+    def __init__(self, fpath: str, fixed_channels: int = 100):
+        """Calls the load function to reduce the number of steps for loading data.
+
+        Args:
+            fpath (str): The path to the data file to load.
+            fixed_channels (int, optional): The fixed number of channels to use. 
+            Defaults to 100.
+        """
+        self.load(fpath, fixed_channels=fixed_channels)
+
+    def load(self, fpath: str, fixed_channels: int = 100):
+        """Loads data from Jango 2015 files, similarly to XDSDataset. Limits 
+        code complexity by not loading and processing EMG and not covering cases that
+        don't apply to Jango 2015 files. 
+
+        Args:
+            fpath (str): The path to the data file to load.
+            fixed_channels (int, optional): The fixed number of channels to use. 
+            Defaults to 100.
+        """
+        # Use the filename stem to name the object
+        self.name = pathlib.Path(fpath).stem
+        # Load the XDS file (.mat < 7.3)
+        xds = loadmat(fpath)['xds']
+        # Collect metadata
+        xds_meta = xds['meta'][0][0][0][0]
+        bin_width = xds['bin_width'][0][0][0][0]
+        self.meta = {
+            'monkey_name': xds_meta['monkey'][0],
+            'task_name': xds_meta['task'][0],
+            'duration': xds_meta['duration'][0],
+            'collect_date': xds_meta['dateTime'][0],
+            'raw_file_name': xds_meta['rawFileName'][0],
+            'array': xds_meta['array'][0],
+            'bin_width': bin_width,
+            'sorted': xds['sorted'][0][0][0][0],
+        }
+        # Collect continuous data
+        time_stamps = np.squeeze(xds['time_frame'][0][0])
+        spike_times = xds['spikes'][0][0][0].tolist()
+        # Standardize unit names and ordering
+        unit_indices = np.array([int(name[0][4:]) for name in xds['unit_names'][0][0][0]]) - 1
+        unit_names = [f'{i:04d}' for i in np.arange(fixed_channels)]
+        name_dict = {
+            'spikes': unit_names,
+            'kin_p': ['x', 'y'],
+            'kin_v': ['x', 'y'],
+            'kin_a': ['x', 'y'],
+            # 'emg': [name[0] for name in xds['EMG_names'][0][0][0]],
+            # 'emg_notch': [name[0] for name in xds['EMG_names'][0][0][0]],
+            'force': ['x', 'y'],
+
+        }
+        # # TODO: Add EMG import?
+        # raw_emg_time_stamps = np.squeeze(xds['raw_EMG_time_frame'][0][0])
+        # Collect trial info into a DataFrame
+        header = [head[0][0] for head in xds['trial_info_table_header'][0][0]]
+        table = xds['trial_info_table'][0][0].tolist()
+        trial_info = pd.DataFrame(table, columns=header[:-3])
+        # Eliminate extra dimensions from MATLAB
+        for col in trial_info.columns:
+            trial_info[col] = trial_info[col].apply(np.squeeze)
+        # Rename some columns
+        trial_info = trial_info.rename(
+            columns={
+                'startTime': 'start_time', 
+                'endTime': 'end_time', 
+                'goCue': 'goCueTime',
+                }
+            )
+        # Convert times into timedeltas
+        for col in trial_info.columns:
+            if 'time' in col.lower():
+                trial_info[col] = pd.to_timedelta(trial_info[col], unit='s')
+        # Bin the spikes
+        extra_point = np.around([time_stamps[-1] + bin_width], decimals=3)
+        hist_bins = np.concatenate([time_stamps, extra_point])
+        spikes = [np.histogram(st, bins=hist_bins)[0] for st in spike_times]
+        spikes = np.stack(spikes, axis=-1)
+        # Fill spikes into fixed array structure
+        spikes_ordered = np.zeros((len(spikes), fixed_channels))
+        spikes_ordered[:, unit_indices] = spikes
+        # Add the data to the dataframe
+        data_dict = {
+            'spikes': spikes_ordered,
+            'kin_p': xds['kin_p'][0][0],
+            'kin_v': xds['kin_v'][0][0],
+            'kin_a': xds['kin_a'][0][0],
+            'force': xds['force'][0][0],
+        }
+        self.init_data_from_dict(
+            data_dict,
+            bin_width,
+            name_dict=name_dict,
+            trial_info=trial_info,
+            time_stamps=time_stamps)
