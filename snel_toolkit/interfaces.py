@@ -1,46 +1,48 @@
 """A module for interfacing RDS data with external models.
-Currently contains only LFADSInterface, which handles breaking up 
-continuous or trialized RDS data into smaller sections known as chops, 
-as well as reassembling these chops back into continuous or trialized 
+Currently contains only LFADSInterface, which handles breaking up
+continuous or trialized RDS data into smaller sections known as chops,
+as well as reassembling these chops back into continuous or trialized
 data after they are processed by LFADS.
 """
 
-import os
-import h5py
 import logging
-from os import path
-import pandas as pd
-import numpy as np
+import os
 from collections import defaultdict
+from os import path
 
+import h5py
+import numpy as np
+import pandas as pd
 
 # Standard data names expected by LFADS
-DATA_NAME = 'data'
-EXT_INPUT_NAME = 'ext_input'
-INDEX_NAME = 'inds'
+DATA_NAME = "data"
+EXT_INPUT_NAME = "ext_input"
+INDEX_NAME = "inds"
 # Mapping from `signal_type`s to HDF5 data labels
-DEFAULT_CHOP_MAP = {'spikes': DATA_NAME}
+DEFAULT_CHOP_MAP = {"spikes": DATA_NAME}
 # Mapping from LFADSOutput fields to `signal_type`s
 DEFAULT_MERGE_MAP = {
-    'rates': 'lfads_rates', 
-    'factors': 'lfads_factors', 
-    'gen_inputs': 'lfads_gen_inputs',
+    "rates": "lfads_rates",
+    "factors": "lfads_factors",
+    "gen_inputs": "lfads_gen_inputs",
 }
 # NOTE: deEMG NOT IMPLEMENTED IN lfads_tf2
 # Mapping for EMG chopping
-DEFAULT_EMG_CHOP_MAP = {'emg_notch': DATA_NAME}
+DEFAULT_EMG_CHOP_MAP = {"emg_notch": DATA_NAME}
 # Mapping from LFADSOutput fields to `signal_type`s
 DEFAULT_EMG_MERGE_MAP = {
-    'rates': 'deEMG_means',
-    'factors': 'deEMG_factors',
-    'gen_inputs': 'deEMG_gen_inputs',
+    "rates": "deEMG_means",
+    "factors": "deEMG_factors",
+    "gen_inputs": "deEMG_gen_inputs",
 }
 
 # Standard per-module logging system
 logger = logging.getLogger(__name__)
 
+
 class SegmentRecord:
     """Stores information needed to reconstruct a segment from chops."""
+
     def __init__(self, seg_id, clock_time, offset, n_chops, overlap):
         """Stores the information needed to reconstruct a segment.
         Parameters
@@ -67,24 +69,25 @@ class SegmentRecord:
         Parameters
         ----------
         chops : np.ndarray
-            A 3D numpy array of shape n_chops x seg_len x data_dim that 
+            A 3D numpy array of shape n_chops x seg_len x data_dim that
             holds the data from all of the chops in this segment.
         smooth_pwr : float, optional
-            The power to use for smoothing. See `merge_chops` 
+            The power to use for smoothing. See `merge_chops`
             function for more details, by default 2
         Returns
         -------
         pd.DataFrame
-            A DataFrame of reconstructed segment data, indexed by the 
+            A DataFrame of reconstructed segment data, indexed by the
             clock_time of the original segment.
         """
 
         # Merge the chops for this segment
         merged_array = merge_chops(
-            chops, 
-            overlap=self.overlap, 
+            chops,
+            overlap=self.overlap,
             orig_len=len(self.clock_time) - self.offset,
-            smooth_pwr=smooth_pwr)
+            smooth_pwr=smooth_pwr,
+        )
         # Add NaNs for points that were not modeled due to offset
         data_dim = merged_array.shape[1]
         offset_nans = np.full((self.offset, data_dim), np.nan)
@@ -95,14 +98,16 @@ class SegmentRecord:
 
 
 class LFADSInterface:
-    def __init__(self,
-                 window,
-                 overlap,
-                 max_offset=0,
-                 chop_margins=0,
-                 random_seed=None,
-                 chop_fields_map=DEFAULT_CHOP_MAP,
-                 merge_fields_map=DEFAULT_MERGE_MAP):
+    def __init__(
+        self,
+        window,
+        overlap,
+        max_offset=0,
+        chop_margins=0,
+        random_seed=None,
+        chop_fields_map=DEFAULT_CHOP_MAP,
+        merge_fields_map=DEFAULT_MERGE_MAP,
+    ):
         """Initializes an LFADSInterface.
         Parameters
         ----------
@@ -111,29 +116,29 @@ class LFADSInterface:
         overlap : int
             The overlap between chopped segments in ms.
         max_offset : int, optional
-            The maximum offset of the first chop from the beginning of 
-            each segment in ms. The actual offset will be chose 
+            The maximum offset of the first chop from the beginning of
+            each segment in ms. The actual offset will be chose
             randomly. By default, 0 adds no offset.
         chop_margins : int, optional
-            The size of extra margins to add to either end of each chop 
-            in bins, designed for use with the temporal_shift operation 
+            The size of extra margins to add to either end of each chop
+            in bins, designed for use with the temporal_shift operation
             in LFADS, by default 0.
         random_seed : int, optional
             The random seed for generating the dataset, by default None
             does not use a random seed.
         chop_fields_map : dict, optional
-            A dictionary mapping the column groups of the neural 
-            DataFrame to names in the LFADS input file. By default, 
+            A dictionary mapping the column groups of the neural
+            DataFrame to names in the LFADS input file. By default,
             maps 'spikes' to 'data'.
         merge_fields_map : dict, optional
-            A dictionary mapping elements of the LFADSOutput tuple to 
-            names in the full DataFrame. By default, maps `rates` to 
-            `lfads_rates`, `factors` to `lfads_factors`, and 
+            A dictionary mapping elements of the LFADSOutput tuple to
+            names in the full DataFrame. By default, maps `rates` to
+            `lfads_rates`, `factors` to `lfads_factors`, and
             `gen_inputs` to `lfads_gen_inputs`.
         """
 
         def to_timedelta(ms):
-            return pd.to_timedelta(ms, unit='ms')
+            return pd.to_timedelta(ms, unit="ms")
 
         self.window = to_timedelta(window)
         self.overlap = to_timedelta(overlap)
@@ -152,32 +157,36 @@ class LFADSInterface:
         Returns
         -------
         dict of np.array
-            A data_dict of the chopped data. Consists of a dictionary 
-            with data tags mapping to 3D numpy arrays with dimensions 
+            A data_dict of the chopped data. Consists of a dictionary
+            with data tags mapping to 3D numpy arrays with dimensions
             corresponding to samples x time x features.
         """
 
         # Set the random seed for the offset
         if self.random_seed is not None:
             np.random.seed(self.random_seed)
-        
+
         # Get info about the column groups to be chopped
         fields_map = self.chop_fields_map
         data_fields = sorted(fields_map.keys())
-        get_field_dim = lambda field: len(getattr(neural_df, field).columns)
+
+        def get_field_dim(field):
+            return len(getattr(neural_df, field).columns)
+
         data_dims = [get_field_dim(f) for f in data_fields]
         data_splits = data_dims[:-1]
         input_fields = [fields_map[f] for f in data_fields]
         # Report information about the fields that are being chopped
-        logger.info(f'Mapping data field(s) {data_fields} to LFADS input '
-            f'field(s) {input_fields} with dimension(s) {data_dims}.')
-        
+        logger.info(
+            f"Mapping data field(s) {data_fields} to LFADS input "
+            f"field(s) {input_fields} with dimension(s) {data_dims}."
+        )
+
         # Calculate bin widths and set up segments for chopping
-        if 'trial_id' in neural_df:
+        if "trial_id" in neural_df:
             # Trialized data
-            bin_width = neural_df.clock_time.iloc[1] \
-                - neural_df.clock_time.iloc[0]
-            segments = neural_df.groupby('trial_id')
+            bin_width = neural_df.clock_time.iloc[1] - neural_df.clock_time.iloc[0]
+            segments = neural_df.groupby("trial_id")
         else:
             # Continuous data
             bin_width = neural_df.index[1] - neural_df.index[0]
@@ -186,20 +195,25 @@ class LFADSInterface:
         # Calculate the number of bins to use for chopping parameters
         window = int(self.window / bin_width)
         overlap = int(self.overlap / bin_width)
-        chop_margins_td = pd.to_timedelta(
-            self.chop_margins * bin_width, unit='ms')
+        chop_margins_td = pd.to_timedelta(self.chop_margins * bin_width, unit="ms")
 
         # Get correct offset based on data type
-        if 'trial_id' in neural_df:
+        if "trial_id" in neural_df:
             # Trialized data
             max_offset = int(self.max_offset / bin_width)
             max_offset_td = self.max_offset
-            get_offset = lambda: np.random.randint(max_offset+1)
+
+            def get_offset():
+                return np.random.randint(max_offset + 1)
+
         else:
             # Continuous data
             max_offset = 0
             max_offset_td = pd.to_timedelta(max_offset)
-            get_offset = lambda: 0
+
+            def get_offset():
+                return 0
+
             if self.max_offset > pd.to_timedelta(0):
                 # Doesn't make sense to use offset on continuous data
                 logger.info("Ignoring offset for continuous data.")
@@ -208,13 +222,15 @@ class LFADSInterface:
             return int(timedelta.total_seconds() * 1000)
 
         # Log information about the chopping to be performed
-        chop_message = ' - '.join([
-            'Chopping data for LFADS',
-            f'Window: {window} bins, {to_ms(self.window)} ms',
-            f'Overlap: {overlap} bins, {to_ms(self.overlap)} ms',
-            f'Max offset: {max_offset} bins, {to_ms(max_offset_td)} ms',
-            f'Chop margins: {self.chop_margins} bins, {to_ms(chop_margins_td)} ms',
-        ])
+        chop_message = " - ".join(
+            [
+                "Chopping data for LFADS",
+                f"Window: {window} bins, {to_ms(self.window)} ms",
+                f"Overlap: {overlap} bins, {to_ms(self.overlap)} ms",
+                f"Max offset: {max_offset} bins, {to_ms(max_offset_td)} ms",
+                f"Chop margins: {self.chop_margins} bins, {to_ms(chop_margins_td)} ms",
+            ]
+        )
         logger.info(chop_message)
 
         # Iterate through segments, which can be trials or continuous data
@@ -234,10 +250,11 @@ class LFADSInterface:
             offset = get_offset()
             # Chop all of the data in this segment
             chops = chop_data(
-                segment_array, 
-                overlap + 2*self.chop_margins, 
-                window + 2*self.chop_margins, 
-                offset)
+                segment_array,
+                overlap + 2 * self.chop_margins,
+                window + 2 * self.chop_margins,
+                offset,
+            )
             # Split the chops back up into the original fields
             data_chops = np.split(chops, data_splits, axis=2)
             # Create the data_dict with LFADS input names
@@ -245,11 +262,8 @@ class LFADSInterface:
                 data_dict[field].append(data_chop)
             # Keep a record to represent each original segment
             seg_rec = SegmentRecord(
-                segment_id,
-                segment_df.clock_time,
-                offset,
-                len(chops),
-                overlap)
+                segment_id, segment_df.clock_time, offset, len(chops), overlap
+            )
             segment_records.append(seg_rec)
         # Store the information for reassembling segments
         self.segment_records = segment_records
@@ -259,18 +273,20 @@ class LFADSInterface:
         dict_key = list(data_dict.keys())[0]
         n_chops = len(data_dict[dict_key])
         n_segments = len(segment_records)
-        logger.info(f'Created {n_chops} chops from {n_segments} segment(s).')
+        logger.info(f"Created {n_chops} chops from {n_segments} segment(s).")
 
         return data_dict
 
-    def chop_and_save(self,
-                      neural_df,
-                      fname,
-                      valid_ratio=0.2,
-                      valid_block=1,
-                      heldin_ratio=1.0,
-                      overwrite=False):
-        """Chops the data from an RDS DataFrame and saves it to an HDF5 
+    def chop_and_save(
+        self,
+        neural_df,
+        fname,
+        valid_ratio=0.2,
+        valid_block=1,
+        heldin_ratio=1.0,
+        overwrite=False,
+    ):
+        """Chops the data from an RDS DataFrame and saves it to an HDF5
         file compatible with LFADS.
         Parameters
         ----------
@@ -281,17 +297,17 @@ class LFADSInterface:
         valid_ratio : float, optional
             The ratio of validation data, by default 0.2
         valid_block : int, optional
-            The number of consecutive samples in validation sample 
-            blocks, consistent with a "blocked" validation strategy. 
-            Ensures minimal overlap between training and validation 
+            The number of consecutive samples in validation sample
+            blocks, consistent with a "blocked" validation strategy.
+            Ensures minimal overlap between training and validation
             sets, by default 1.
         heldin_ratio : float, optional
             The ratio of samples to use for a heldin subset on which
             to train LFADS. This option creates an additional LFADS data
-            file with the added prefix 'heldin_' which contains a 
+            file with the added prefix 'heldin_' which contains a
             fraction of the total training and validation data. The idea
             is to train LFADS on the heldin subset and perform posterior
-            sampling on the full dataset. This argument is useful for 
+            sampling on the full dataset. This argument is useful for
             large datasets.
         overwrite : bool, optional
             Whether to overwrite any existing file , by default False
@@ -299,8 +315,9 @@ class LFADSInterface:
 
         # Check if output file exists
         if not overwrite and path.isfile(fname):
-            raise AssertionError(f'File {fname} already exists. '
-                'Set `overwrite`=True to overwrite.')
+            raise AssertionError(
+                f"File {fname} already exists. " "Set `overwrite`=True to overwrite."
+            )
         # Create any directories if necessary
         data_dir = path.dirname(fname)
         os.makedirs(data_dir, exist_ok=True)
@@ -316,57 +333,59 @@ class LFADSInterface:
         # Trim extra samples from incomplete blocks
         in_valid = in_valid[:n_samples]
         # Get the training and validation samples
-        valid_inds, = np.where(in_valid)
-        train_inds, = np.where(~in_valid)
+        (valid_inds,) = np.where(in_valid)
+        (train_inds,) = np.where(~in_valid)
+
         # Add function for saving data to the H5 file for LFADS
         def save_data(fname, train_inds, valid_inds):
-            with h5py.File(fname, 'w') as h5file:
-                for ind_name, inds \
-                    in zip(['train_', 'valid_'], [train_inds, valid_inds]):
+            with h5py.File(fname, "w") as h5file:
+                for ind_name, inds in zip(
+                    ["train_", "valid_"], [train_inds, valid_inds]
+                ):
                     # Save the index
-                    h5file.create_dataset(ind_name+INDEX_NAME, data=inds)
+                    h5file.create_dataset(ind_name + INDEX_NAME, data=inds)
                     for data_tag, samples in data_dict.items():
                         # Save each data type in the data_dict
-                        h5file.create_dataset(
-                            ind_name+data_tag, data=samples[inds])
+                        h5file.create_dataset(ind_name + data_tag, data=samples[inds])
             # Report an informative message
-            logger.info(f'Successfully wrote {len(train_inds)} train and '
-                f'{len(valid_inds)} valid samples to {fname}.')
+            logger.info(
+                f"Successfully wrote {len(train_inds)} train and "
+                f"{len(valid_inds)} valid samples to {fname}."
+            )
+
         # Write all data for the DataFrame
         save_data(fname, train_inds, valid_inds)
         # Save a heldin subset if specified
         if heldin_ratio < 1.0:
             # Add the 'heldin_' prefix to the file name
             dirname, basename = path.dirname(fname), path.basename(fname)
-            heldin_fname = path.join(dirname, 'heldin_' + basename)
+            heldin_fname = path.join(dirname, "heldin_" + basename)
             # Compute heldin sample indices
             n_train, n_valid = len(train_inds), len(valid_inds)
-            in_heldin_train = np.arange(n_train) % \
-                np.round(1 / heldin_ratio) == 0
-            in_heldin_valid = np.arange(n_valid) % \
-                np.round(1 / heldin_ratio) == 0
+            in_heldin_train = np.arange(n_train) % np.round(1 / heldin_ratio) == 0
+            in_heldin_valid = np.arange(n_valid) % np.round(1 / heldin_ratio) == 0
             heldin_train_inds = train_inds[np.where(in_heldin_train)[0]]
             heldin_valid_inds = valid_inds[np.where(in_heldin_valid)[0]]
             # Save the heldin subset file
             save_data(heldin_fname, heldin_train_inds, heldin_valid_inds)
 
     def merge(self, data_dict, smooth_pwr=2):
-        """Merges the chops to reconstruct the original input 
+        """Merges the chops to reconstruct the original input
         sequence.
         Parameters
         ----------
         data_dict : dict of np.array
             A dictionary of data to merge, where the first dimension is
-            samples, the second dimension is time, and the third 
+            samples, the second dimension is time, and the third
             dimension is variable.
         smooth_pwr : float, optional
-            The power to use for smoothing. See `merge_chops` 
+            The power to use for smoothing. See `merge_chops`
             function for more details, by default 2
         Returns
         -------
         pd.DataFrame
-            A merged DataFrame indexed by the clock time of the original 
-            chops. Columns are multiindexed using `fields_map`. 
+            A merged DataFrame indexed by the clock time of the original
+            chops. Columns are multiindexed using `fields_map`.
             Unmodeled data is indicated by NaNs.
         """
 
@@ -383,35 +402,35 @@ class LFADSInterface:
         # Separate out the chops for each segment
         seg_chops = np.split(output_full, seg_splits, axis=0)
         # Reconstruct the segment DataFrames
-        segment_dfs = [record.rebuild_segment(chops, smooth_pwr) \
-            for record, chops in zip(self.segment_records, seg_chops)]
+        segment_dfs = [
+            record.rebuild_segment(chops, smooth_pwr)
+            for record, chops in zip(self.segment_records, seg_chops)
+        ]
         # Concatenate the segments with clock_time indices
         merged_df = pd.concat(segment_dfs)
         # Add mulitindexed columns
         signal_types = [fields_map[f] for f in output_fields]
-        midx_tuples = [(sig, f'{i:04}') \
-            for sig, dim in zip(signal_types, output_dims) \
-                for i in range(dim)]
+        midx_tuples = [
+            (sig, f"{i:04}")
+            for sig, dim in zip(signal_types, output_dims)
+            for i in range(dim)
+        ]
         merged_df.columns = pd.MultiIndex.from_tuples(midx_tuples)
 
         return merged_df
 
-
-    def load_and_merge(self, 
-                       fname, 
-                       orig_df,
-                       smooth_pwr=2):
-        """Loads the posterior averages from an LFADS output file and places 
+    def load_and_merge(self, fname, orig_df, smooth_pwr=2):
+        """Loads the posterior averages from an LFADS output file and places
         them in the appropriate locations in the original DataFrame.
         Parameters
         ----------
         fname : str
             The path to the LFADS output file.
         orig_df : pd.DataFrame
-            The continuous or trial_data DataFrame that was used to 
+            The continuous or trial_data DataFrame that was used to
             generate the LFADS input.
         smooth_pwr : float, optional
-            The power to use for smoothing. See `merge_chops` 
+            The power to use for smoothing. See `merge_chops`
             function for more details, by default 2
         Returns
         -------
@@ -419,54 +438,55 @@ class LFADSInterface:
             The original DataFrame with the merged data columns added.
         """
 
-        # Get the model directory and posterior sampling filename
-        model_dir, ps_filename = path.dirname(fname), path.basename(fname)
         # Load the model output
-        with h5py.File(fname, 'r') as hf:
+        with h5py.File(fname, "r") as hf:
             data_dict = {k: np.array(v) for k, v in hf.items()}
         # Merge training and validation sets
         merge_data = {}
         for field in self.merge_fields_map.keys():
-            train_data = data_dict['train_' + field]
-            valid_data = data_dict['valid_' + field]
+            train_data = data_dict["train_" + field]
+            valid_data = data_dict["valid_" + field]
             data = np.full_like(np.concatenate([train_data, valid_data]), np.nan)
-            data[data_dict['train_inds'].astype(int)] = train_data
-            data[data_dict['valid_inds'].astype(int)] = valid_data
+            data[data_dict["train_inds"].astype(int)] = train_data
+            data[data_dict["valid_inds"].astype(int)] = valid_data
             merge_data[field] = data
         # Merge the LFADS output using self.segment_records
         merged_df = self.merge(merge_data, smooth_pwr=smooth_pwr)
         # Concatenate the merged data to the original data using clock_time
-        if 'trial_id' in orig_df:
+        if "trial_id" in orig_df:
             # Temporarily use clock_time as the index
-            concat_df = orig_df.set_index('clock_time')
+            concat_df = orig_df.set_index("clock_time")
             full_df = pd.concat([concat_df, merged_df], axis=1)
             full_df = full_df.reset_index()
         else:
             full_df = pd.concat([orig_df, merged_df], axis=1)
         # TODO: Make sure spike column names are inherited by rates
-        
+
         return full_df
 
+
 class deEMGInterface(LFADSInterface):
-    def __init__(self,
-                 *args,
-                 clip_quantile=0.99,
-                 scale_quantile=0.95,
-                 scale_factor=1,
-                 log_transform=False,
-                 chop_fields_map=DEFAULT_EMG_CHOP_MAP,
-                 merge_fields_map=DEFAULT_EMG_MERGE_MAP,
-                 **kwargs):
+    def __init__(
+        self,
+        *args,
+        clip_quantile=0.99,
+        scale_quantile=0.95,
+        scale_factor=1,
+        log_transform=False,
+        chop_fields_map=DEFAULT_EMG_CHOP_MAP,
+        merge_fields_map=DEFAULT_EMG_MERGE_MAP,
+        **kwargs,
+    ):
         """Implements interface functionality specific to EMG data.
         Also allows args and kwargs from `LFADSInterface.__init__`.
         Parameters
         ----------
         clip_quantile : float, optional
-            The quantile above which to clip EMG values, by default 0.99. 
+            The quantile above which to clip EMG values, by default 0.99.
             Note 1.0 is 100th quantile and doesn't perform clipping.
         scale_quantile : float, optional
-            The quantile to use for range scaling of EMG values, by 
-            default 0.95. Note 1.0 is the 100th percentile and will use 
+            The quantile to use for range scaling of EMG values, by
+            default 0.95. Note 1.0 is the 100th percentile and will use
             the max for scaling, but None will perform no scaling.
         scale_factor : int, optional
             The multiplier for rescaling EMG , by default 1
@@ -481,10 +501,10 @@ class deEMGInterface(LFADSInterface):
         self.scale_quants = None
         # Perform initialization as defined in the base class
         super().__init__(
-            *args, 
-            chop_fields_map=chop_fields_map, 
-            merge_fields_map=merge_fields_map, 
-            **kwargs
+            *args,
+            chop_fields_map=chop_fields_map,
+            merge_fields_map=merge_fields_map,
+            **kwargs,
         )
 
     def chop(self, neural_df, *args, **kwargs):
@@ -515,11 +535,13 @@ class deEMGInterface(LFADSInterface):
         # Bring transformed values back into the original dataframe
         neural_df.update(trans_df)
         # Report transformation of EMG data
-        logger.info(f'Transforming EMG data - ' \
-            f'Clip quantile: {self.clip_quantile}, ' \
-            f'Scale quantile: {self.scale_quantile}, ' \
-            f'Scale factor: {self.scale_factor}, ' \
-            f'Log transform: {self.log_transform}')
+        logger.info(
+            f"Transforming EMG data - "
+            f"Clip quantile: {self.clip_quantile}, "
+            f"Scale quantile: {self.scale_quantile}, "
+            f"Scale factor: {self.scale_factor}, "
+            f"Log transform: {self.log_transform}"
+        )
         # Perform chopping and saving as defined in the base class
         data_dict = super().chop(neural_df, *args, **kwargs)
         return data_dict
@@ -527,11 +549,12 @@ class deEMGInterface(LFADSInterface):
 
 # ========== STATELESS CHOPPING AND MERGING FUNCTIONS ==========
 
+
 def chop_data(data, overlap, window, offset=0):
-    """Rearranges an array of continuous data into overlapping segments. 
-    
-    This low-level function takes a 2-D array of features measured 
-    continuously through time and breaks it up into a 3-D array of 
+    """Rearranges an array of continuous data into overlapping segments.
+
+    This low-level function takes a 2-D array of features measured
+    continuously through time and breaks it up into a 3-D array of
     partially overlapping time segments.
     Parameters
     ----------
@@ -544,41 +567,44 @@ def chop_data(data, overlap, window, offset=0):
     Returns
     -------
     np.ndarray
-        An SxTxN numpy array of S overlapping segments spanning 
+        An SxTxN numpy array of S overlapping segments spanning
         T time points with N features.
-    
+
     See Also
     --------
     lfads_tf2.utils.merge_chops : Performs the opposite of this operation.
-    
+
     """
 
     # Random offset breaks temporal connection between trials and chops
     offset_data = data[offset:]
     shape = (
-        int((offset_data.shape[0] - offset - overlap)/(window - overlap)), 
+        int((offset_data.shape[0] - offset - overlap) / (window - overlap)),
         window,
         offset_data.shape[-1],
     )
     strides = (
-        offset_data.strides[0]*(window - overlap), 
-        offset_data.strides[0], 
+        offset_data.strides[0] * (window - overlap),
+        offset_data.strides[0],
         offset_data.strides[1],
     )
-    chopped = np.lib.stride_tricks.as_strided(
-        offset_data, shape=shape, strides=strides).copy().astype('f')
+    chopped = (
+        np.lib.stride_tricks.as_strided(offset_data, shape=shape, strides=strides)
+        .copy()
+        .astype("f")
+    )
     return chopped
 
 
 def merge_chops(data, overlap, orig_len=None, smooth_pwr=2):
     """Merges an array of overlapping segments back into continuous data.
-    This low-level function takes a 3-D array of partially overlapping 
+    This low-level function takes a 3-D array of partially overlapping
     time segments and merges it back into a 2-D array of features measured
     continuously through time.
     Parameters
     ----------
     data : np.ndarray
-        An SxTxN numpy array of S overlapping segments spanning 
+        An SxTxN numpy array of S overlapping segments spanning
         T time points with N features.
     overlap : int
         The number of overlapping points between subsequent segments.
@@ -586,32 +612,33 @@ def merge_chops(data, overlap, orig_len=None, smooth_pwr=2):
         The original length of the continuous data, by default None
         will cause the length to depend on the input data.
     smooth_pwr : float, optional
-        The power of smoothing. To keep only the ends of chops and 
-        discard the beginnings, use np.inf. To linearly blend the 
-        chops, use 1. Raising above 1 will increasingly prefer the 
-        ends of chops and lowering towards 0 will increasingly 
-        prefer the beginnings of chops (not recommended). To use 
-        only the beginnings of chops, use 0 (not recommended). By 
+        The power of smoothing. To keep only the ends of chops and
+        discard the beginnings, use np.inf. To linearly blend the
+        chops, use 1. Raising above 1 will increasingly prefer the
+        ends of chops and lowering towards 0 will increasingly
+        prefer the beginnings of chops (not recommended). To use
+        only the beginnings of chops, use 0 (not recommended). By
         default, 2 slightly prefers the ends of segments.
     Returns
     -------
     np.ndarray
         A TxN numpy array of N features measured across T time points.
-    
+
     See Also
     --------
     lfads_tf2.utils.chop_data : Performs the opposite of this operation.
     """
 
     if smooth_pwr < 1:
-        logger.warning('Using `smooth_pwr` < 1 for merging '
-            'chops is not recommended.')
+        logger.warning(
+            "Using `smooth_pwr` < 1 for merging " "chops is not recommended."
+        )
 
     merged = []
-    full_weight_len = data.shape[1] - 2*overlap
+    full_weight_len = data.shape[1] - 2 * overlap
     if overlap > 0:
         # Create x-values for the ramp
-        x = np.linspace(1/overlap, 1 - 1/overlap, overlap)
+        x = np.linspace(1 / overlap, 1 - 1 / overlap, overlap)
         # Compute a power-function ramp to transition
         ramp = 1 - x ** smooth_pwr
     else:
@@ -627,9 +654,9 @@ def merge_chops(data, overlap, orig_len=None, smooth_pwr=2):
         if i == 0:
             last = last * ramp
         elif i == len(data) - 1:
-            first = first * (1-ramp) + merged.pop(-1)
+            first = first * (1 - ramp) + merged.pop(-1)
         else:
-            first = first * (1-ramp) + merged.pop(-1)
+            first = first * (1 - ramp) + merged.pop(-1)
             last = last * ramp
         # Track all of the chops in a list
         merged.extend([first, middle, last])
@@ -640,38 +667,35 @@ def merge_chops(data, overlap, orig_len=None, smooth_pwr=2):
     merged = np.concatenate(merged)
     # Indicate unmodeled data with NaNs
     if orig_len is not None and len(merged) < orig_len:
-        nans = np.full((orig_len-len(merged), merged.shape[1]), np.nan)
+        nans = np.full((orig_len - len(merged), merged.shape[1]), np.nan)
         merged = np.concatenate([merged, nans])
-    
+
     return merged
 
 
-
-if __name__ == '__main__':
-    """A demonstration of the use of LFADSInterface.
-    """
+if __name__ == "__main__":
+    """A demonstration of the use of LFADSInterface."""
     # Configure the loggers
     logging.basicConfig(level=logging.INFO)
 
     # Set parameters for data generation
-    BIN_SIZE = 20 # in ms
-    WINDOW = 1000 # in ms
-    OVERLAP = 300 # in ms
-    MAX_OFFSET = 100 # in ms
-    # NOTE: We don't use chop_margins here because it relies on LFADS 
-    # dropping margins in its posterior average arrays, which has not 
+    BIN_SIZE = 20  # in ms
+    WINDOW = 1000  # in ms
+    OVERLAP = 300  # in ms
+    MAX_OFFSET = 100  # in ms
+    # NOTE: We don't use chop_margins here because it relies on LFADS
+    # dropping margins in its posterior average arrays, which has not
     # yet been implemented in lfads_t2.
-    CHOP_MARGINS = 0 # in bins
+    CHOP_MARGINS = 0  # in bins
     RANDOM_SEED = 0
 
-
     # =========== DEMONSTRATE EMG CHOPPING ===========
-    from snel_toolkit.datasets.area2 import Area2Dataset, EXAMPLE_FILE
+    from snel_toolkit.datasets.area2 import EXAMPLE_FILE, Area2Dataset
 
-    TEST_DIR = path.expanduser('~/tmp/area2')
-    DATA_FILE = path.join(TEST_DIR, 'lfads_input/lfads_data.h5')
-    MODEL_DIR = path.join(TEST_DIR, 'lfads_output')
-    PS_FILENAME = 'posterior_samples.h5'
+    TEST_DIR = path.expanduser("~/tmp/area2")
+    DATA_FILE = path.join(TEST_DIR, "lfads_input/lfads_data.h5")
+    MODEL_DIR = path.join(TEST_DIR, "lfads_output")
+    PS_FILENAME = "posterior_samples.h5"
     PS_PATH = path.join(MODEL_DIR, PS_FILENAME)
 
     # Load, resample, and trialize the dataset
@@ -688,17 +712,18 @@ if __name__ == '__main__':
         chop_margins=CHOP_MARGINS,
         random_seed=RANDOM_SEED,
         # NOTE: We wouldn't typically use force as an external input
-        chop_fields_map={'spikes': 'data', 'force': 'ext_input'},
+        chop_fields_map={"spikes": "data", "force": "ext_input"},
     )
 
-    # Chop the data and save an input file for LFADS    
+    # Chop the data and save an input file for LFADS
     interface.chop_and_save(trial_data, DATA_FILE, overwrite=True)
 
     # If the posterior average file does not exist, train and sample LFADS
     if not path.isfile(PS_PATH):
         # Only load TF / LFADS if required
-        from lfads_tf2.models import LFADS
         from lfads_tf2.defaults import get_cfg_defaults
+        from lfads_tf2.models import LFADS
+
         # Get the default configuration
         cfg_node = get_cfg_defaults()
         # Make some updates to the configuration
@@ -725,9 +750,8 @@ if __name__ == '__main__':
 
     # Load the LFADS outputs and merge them back to the continuous DF
     trial_data = interface.load_and_merge(PS_PATH, trial_data)
-    logger.info('Chopping and merging demonstration complete.')
+    logger.info("Chopping and merging demonstration complete.")
     print(trial_data)
-
 
     # =========== DEMONSTRATE EMG CHOPPING ===========
     CLIP_QUANTILE = 0.95
@@ -735,14 +759,14 @@ if __name__ == '__main__':
     SCALE_FACTOR = 10
     LOG_TRANSFORM = True
 
-    from snel_toolkit.datasets.xds import XDSDataset, EXAMPLE_FILE
+    from snel_toolkit.datasets.xds import EXAMPLE_FILE, XDSDataset
 
-    TEST_DIR = path.expanduser('~/tmp/xds')
-    DATA_FILE = path.join(TEST_DIR, 'lfads_input/lfads_data.h5')
-    MODEL_DIR = path.join(TEST_DIR, 'lfads_output')
-    PS_FILENAME = 'posterior_samples.h5'
+    TEST_DIR = path.expanduser("~/tmp/xds")
+    DATA_FILE = path.join(TEST_DIR, "lfads_input/lfads_data.h5")
+    MODEL_DIR = path.join(TEST_DIR, "lfads_output")
+    PS_FILENAME = "posterior_samples.h5"
     PS_PATH = path.join(MODEL_DIR, PS_FILENAME)
-    
+
     dataset = XDSDataset(path.basename(EXAMPLE_FILE))
     dataset.load(EXAMPLE_FILE)
     dataset.resample(BIN_SIZE / 1000)

@@ -1,7 +1,7 @@
-import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-    
+import numpy as np
+
+
 class PSTH:
     def __init__(self, trial_conds):
         """[summary]
@@ -18,14 +18,14 @@ class PSTH:
         trials = self.trial_conds[self.trial_conds == cond].index
         all_cond_data = trial_data[trial_data.trial_id.isin(trials)]
         cond_data = all_cond_data[field].copy()
-        cond_data['align_time'] = all_cond_data.align_time
+        cond_data["align_time"] = all_cond_data.align_time
 
         return cond_data
 
     def compute_trial_average(self, trial_data, field, conditions=None):
-        
+
         # Make sure that all required fields are in the dataframe
-        required_fields = ['align_time', field]
+        required_fields = ["align_time", field]
         assert all([c in trial_data for c in required_fields])
         # Use all available conditions by default
         if conditions is None:
@@ -41,27 +41,29 @@ class PSTH:
             # Skip the condition if there are no data for this condition
             if len(cond_data) < 1:
                 continue
-            psth_means[cond] = cond_data.groupby('align_time').mean()
-            psth_sems[cond] = cond_data.groupby('align_time').sem()
+            psth_means[cond] = cond_data.groupby("align_time").mean()
+            psth_sems[cond] = cond_data.groupby("align_time").sem()
 
         return psth_means, psth_sems
 
-    def plot(self, 
-             psth_means, 
-             psth_sems=None, 
-             neurons=None, 
-             max_neurons=40,
-             max_conditions=10,
-             ncols=8,
-             cmap=plt.cm.rainbow,
-             save_path=None):
+    def plot(
+        self,
+        psth_means,
+        psth_sems=None,
+        neurons=None,
+        max_neurons=40,
+        max_conditions=10,
+        ncols=8,
+        cmap=plt.cm.rainbow,
+        save_path=None,
+    ):
         """Plot PSTHs in subplots.
         Parameters
         ----------
         psth_means : dict of DataFrames
             PSTH means returned from the `compute_trial_average` function.
         psth_sems : dict of DataFrames, optional
-            PSTH standard error returned from the `compute_trial_average` 
+            PSTH standard error returned from the `compute_trial_average`
             function, by default None doesn't plot error.
         neurons : list, optional
             The neurons to plot, by default None
@@ -72,7 +74,7 @@ class PSTH:
         ncols : int, optional
             The number of subplot columns to use, by default 8
         cmap : matplotlib colormap, optional
-            The colormap to use for coloring conditions, by default 
+            The colormap to use for coloring conditions, by default
             plt.cm.rainbow
         save_path : str, optional
             The path to save the figure, by default None doesn't save
@@ -90,8 +92,8 @@ class PSTH:
         else:
             n_neurons = len(neurons)
         # Create an array of subplots
-        nrows = int(np.ceil(n_neurons/ncols))
-        fig, axes = plt.subplots(nrows, ncols, sharex=True, figsize=(20,10))
+        nrows = int(np.ceil(n_neurons / ncols))
+        fig, axes = plt.subplots(nrows, ncols, sharex=True, figsize=(20, 10))
         # Plot a neuron on each axis
         for neuron, ax in zip(neurons, axes.flatten()):
             for cond, color in zip(plot_conds, colors):
@@ -102,18 +104,15 @@ class PSTH:
                     # Plot standard error of the mean
                     sem = psth_sems[cond][neuron]
                     ax.fill_between(
-                        trace.index, 
-                        trace-sem, 
-                        trace+sem, 
-                        color=color, 
-                        alpha=0.3)
+                        trace.index, trace - sem, trace + sem, color=color, alpha=0.3
+                    )
         # Add a legend for the conditions
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(
-            handles, 
-            labels, 
-            title='Conditions',
-            loc='center left', 
+            handles,
+            labels,
+            title="Conditions",
+            loc="center left",
         )
         # Adjust the layout and make room for the legend
         fig.tight_layout()

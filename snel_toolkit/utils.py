@@ -3,14 +3,19 @@ import multiprocessing
 
 
 def rgetattr(obj, attr, *args):
-    """A recursive drop-in replacement for getattr, 
+    """A recursive drop-in replacement for getattr,
     which also handles dotted attr strings.
     """
+
     def _getattr(obj, attr):
         return getattr(obj, attr, *args)
-    return functools.reduce(_getattr, [obj] + attr.split('.'))
 
-''' Multiprocessing Functions '''
+    return functools.reduce(_getattr, [obj] + attr.split("."))
+
+
+""" Multiprocessing Functions """
+
+
 def fun(f, q_in, q_out):
     while True:
         i, x = q_in.get()
@@ -20,13 +25,14 @@ def fun(f, q_in, q_out):
 
 
 def parmap(f, X, nprocs=multiprocessing.cpu_count()):
-    """ equivalent to Pool.map but works with functions inside Class methods
-    """
+    """equivalent to Pool.map but works with functions inside Class methods"""
     q_in = multiprocessing.Queue(1)
     q_out = multiprocessing.Queue()
 
-    proc = [multiprocessing.Process(target=fun, args=(f, q_in, q_out))
-            for _ in range(nprocs)]
+    proc = [
+        multiprocessing.Process(target=fun, args=(f, q_in, q_out))
+        for _ in range(nprocs)
+    ]
     for p in proc:
         p.daemon = True
         p.start()
