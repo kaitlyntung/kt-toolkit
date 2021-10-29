@@ -1,6 +1,7 @@
-import pandas as pd
-import numpy as np
 import logging
+
+import numpy as np
+import pandas as pd
 from scipy.io import loadmat
 
 from .base import BaseDataset
@@ -60,9 +61,7 @@ class MazeDataset(BaseDataset):
             spikeTimes = ds[0, n]["unit"]["spikeTimes"]
             for i in range(nUnits):
                 inTrialIdx = spikeTimes[0, i] < trialDur
-                spikeIdx = np.floor(spikeTimes[0, i][inTrialIdx]).astype(
-                    "int32"
-                )
+                spikeIdx = np.floor(spikeTimes[0, i][inTrialIdx]).astype("int32")
                 if len(spikeIdx) != 0:
                     datamat[spikeIdx, i] = 1
 
@@ -84,9 +83,7 @@ class MazeDataset(BaseDataset):
 
             # Add to trial_info dict
             trial_info["trialID"].append(ds[0, n]["trialID"][0, 0])
-            trial_info["start_time"].append(
-                pd.to_timedelta(pastEnd + 1, unit="ms")
-            )
+            trial_info["start_time"].append(pd.to_timedelta(pastEnd + 1, unit="ms"))
             trial_info["end_time"].append(
                 pd.to_timedelta(pastEnd + trialDur + 1, unit="ms")
             )
@@ -97,8 +94,7 @@ class MazeDataset(BaseDataset):
                 )
             )
             trial_info["conditionCode"].append(
-                1000 * ds[0, n]["trialType"][0, 0]
-                + ds[0, n]["trialVersion"][0, 0]
+                1000 * ds[0, n]["trialType"][0, 0] + ds[0, n]["trialVersion"][0, 0]
             )
 
             activeFly = 1
@@ -108,9 +104,7 @@ class MazeDataset(BaseDataset):
             yPos = ds[0, n]["PARAMS"]["flyY"][0, 0][0, activeFly - 1]
             trial_info["targetPosX"].append(xPos)
             trial_info["targetPosY"].append(yPos)
-            trial_info["endpointAngle"].append(
-                np.arctan2(yPos, xPos) * 180 / np.pi
-            )
+            trial_info["endpointAngle"].append(np.arctan2(yPos, xPos) * 180 / np.pi)
 
             pastEnd = pastEnd + trialDur + 1
 
@@ -123,17 +117,13 @@ class MazeDataset(BaseDataset):
         feat_names["kin_v"] = ["x", "y"]
 
         dfCols = [("spikes", unit) for unit in feat_names["spikes"]]
-        dfCols.extend(
-            [("kin_p", "x"), ("kin_p", "y"), ("kin_v", "x"), ("kin_v", "y")]
-        )
+        dfCols.extend([("kin_p", "x"), ("kin_p", "y"), ("kin_v", "x"), ("kin_v", "y")])
 
         # Concat arrays to main dataframe
         self.data = pd.DataFrame(
             np.concatenate(trial_data, axis=0),
             dtype="float32",
-            columns=pd.MultiIndex.from_tuples(
-                dfCols, names=("signal_type", "channel")
-            ),
+            columns=pd.MultiIndex.from_tuples(dfCols, names=("signal_type", "channel")),
         )
 
         # Create trial info dataframe
@@ -188,19 +178,17 @@ class MazeDataset(BaseDataset):
         align_field : str
             Field in trial_info to serve as alignment point
         align_range : tuple of int
-            The offsets to add to the alignment field to 
+            The offsets to add to the alignment field to
             calculate the alignment window, in ms
         align_name : str, optional
             Name of the align time column when added
-        
+
         TODO: Same as add_trials
         """
 
         align_times = np.full([self.data.shape[0]], np.nan)
         for idx, row in self.trial_info.iterrows():
-            tstart = tend = int(
-                row[align_field] / pd.to_timedelta(1, unit="ms")
-            )
+            tstart = tend = int(row[align_field] / pd.to_timedelta(1, unit="ms"))
             tstart += align_range[0]
             tend += align_range[1]
             tlength = tend - tstart
