@@ -41,7 +41,8 @@ class BaseDataset(ABC):
                             data_dict, 
                             bin_width, 
                             name_dict={}, 
-                            trial_info=pd.DataFrame()):
+                            trial_info=pd.DataFrame(),
+                            time_stamps=None):
         """Helper function for use in custom loading functions. Allows 
         easier creation of the continuous DataFrame.
         Parameters
@@ -58,6 +59,9 @@ class BaseDataset(ABC):
         trial_info : pd.DataFrame, optional
             A dataframe containing information about the trials, 
             by default pd.DataFrame()
+        time_stamps: np.array
+            A numpy array of time steps in seconds. Must have the same length
+            as the data in data_dict.
         """
         
         self.bin_width = bin_width
@@ -76,9 +80,10 @@ class BaseDataset(ABC):
                 names=('signal_type', 'channel'))
             # Create a DataFrame for each signal_type
             signal = data_dict[signal_type]
-            time_frame = bin_width * np.arange(len(signal))
+            if time_stamps is None:
+                time_stamps = bin_width * np.arange(len(signal))
             signal_type_data = pd.DataFrame(
-                signal, index=time_frame, columns=midx)
+                signal, index=time_stamps, columns=midx)
             signal_type_data.index.name = 'clock_time'
             frames.append(signal_type_data.copy())
 
