@@ -1,4 +1,4 @@
-# Adapted from
+# A dataset for working with data from the Neural Latents Benchmark. Adapted from
 # https://github.com/neurallatents/nlb_tools/blob/main/nlb_tools/nwb_interface.py
 # Original author: Felix Pei
 
@@ -121,7 +121,6 @@ class NLBDataset(BaseDataset):
                 drop=True
             )
             self.descriptions = descriptions_full
-            # TODO: CORRECT TO STANDARD USAGE
             self.bin_width = bin_widths[0]
             new_index = pd.to_timedelta(
                 (
