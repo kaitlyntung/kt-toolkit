@@ -359,7 +359,7 @@ class NLBDataset(BaseDataset):
         align_range : tuple of int, optional
             The offsets to add to the alignment field to
             calculate the alignment window, by default (None, None)
-            uses `trial_start` and `trial_end`
+            uses `start_field` and `end_field`
         margin : int, optional
             The number of ms of extra data to include on either end of
             each trial, labeled with the `margin` column for easy

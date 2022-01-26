@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 
 class PSTH:
@@ -34,15 +35,26 @@ class PSTH:
         elif type(conditions) != list:
             conditions = [conditions]
 
-        psth_means = {}
-        psth_sems = {}
+        psth_means = []
+        psth_sems = []
         for cond in conditions:
             cond_data = self.get_condition_data(trial_data, cond, field)
             # Skip the condition if there are no data for this condition
             if len(cond_data) < 1:
                 continue
-            psth_means[cond] = cond_data.groupby("align_time").mean()
-            psth_sems[cond] = cond_data.groupby("align_time").sem()
+            # Only keep points for which we have data from all trials
+            trials_per_point = cond_data.groupby("align_time").apply(len)
+            all_trial_points = trials_per_point == trials_per_point.max()
+            # Compute mean and standard error
+            psth_mean = cond_data.groupby("align_time").mean()[all_trial_points]
+            psth_sem = cond_data.groupby("align_time").sem()[all_trial_points]
+            psth_mean['condition_id'] = [cond] * len(psth_mean)
+            psth_sem['condition_id'] = [cond] * len(psth_sem)
+            psth_means.append(psth_mean)
+            psth_sems.append(psth_sem)
+        
+        psth_means = pd.concat(psth_means).reset_index()
+        psth_sems = pd.concat(psth_sems).reset_index()
 
         return psth_means, psth_sems
 
