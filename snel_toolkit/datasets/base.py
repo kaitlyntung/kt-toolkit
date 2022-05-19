@@ -1,5 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
+from typing import List
 
 import numpy as np
 import pandas as pd
@@ -36,8 +37,8 @@ class BaseDataset(ABC):
 
     @property
     def bin_size(self):
-        """Calculates the bin size in seconds."""
-        return (self.data.index[1] - self.data.index[0]).total_seconds()
+        """Calculates the bin size in milliseconds."""
+        return (self.data.index[1] - self.data.index[0]).total_seconds() * 1000  # ms
 
     def init_data_from_dict(
         self,
@@ -111,6 +112,11 @@ class BaseDataset(ABC):
         """
 
         logger.info(f"Resampling data to {target_bin} sec.")
+        if target_bin == self.bin_width:
+            logger.warning(
+                f"Dataset already at {target_bin} ms resolution, skipping resampling..."
+            )
+            return
         # Check that resample_factor is an integer
         resample_factor = target_bin / self.bin_width
         assert (
@@ -120,7 +126,7 @@ class BaseDataset(ABC):
         # resamples the analog columns and rebins the spike columns
         def resample_column(x):
             # Always resample so we get the correct indices
-            resamp = x.resample("{}S".format(target_bin)).sum()
+            resamp = x.resample("{}S".format(target_bin / 1000)).sum()
             # Make sure `resample` output has same length as decimate
             resamp = resamp[: int(np.ceil(len(x) / resample_factor))]
             # Replace values for non-spike columns
@@ -164,7 +170,7 @@ class BaseDataset(ABC):
 
         # pandas rolling works only on timestamp indices, not timedelta,
         # so compute window and std with respect to bins
-        gauss_bin_std = gauss_width / (1000.0 * self.bin_width)
+        gauss_bin_std = gauss_width / self.bin_width
         # the window extends 3 x std in either direction (USED TO BE 5)
         win_len = int(6 * gauss_bin_std)
 
@@ -244,7 +250,7 @@ class BaseDataset(ABC):
         )
 
         # choose a filter type
-        samp_freq = 1.0 / self.bin_width
+        samp_freq = 1000.0 / self.bin_width
         if filt_type == "butter":
             sos = signal.butter(order, crit_freq, output="sos", fs=samp_freq)
         elif filt_type == "chebyshev":
@@ -259,6 +265,8 @@ class BaseDataset(ABC):
         # smooth using the specified sos on the columns of interest
         def smooth_cts_columns(x):
             col_signal_type = x.name[0]
+            nan_mask = np.isnan(x.values)
+            x[nan_mask] = 0.0
             if col_signal_type == signal_type:
                 if use_causal:
                     values = signal.sosfilt(sos, x.values)
@@ -267,6 +275,7 @@ class BaseDataset(ABC):
                 smoothed = pd.Series(values, index=x.index)
             else:
                 smoothed = x
+            smoothed[nan_mask] = np.nan
             return smoothed
 
         # overwrite or add columns to the dataframe
@@ -420,6 +429,114 @@ class BaseDataset(ABC):
 
         return pair_corr, chan_names_to_drop
 
+    def get_move_onset(
+        self,
+        move_field="speed",
+        start_field="gocue_time",
+        end_field="end_time",
+        onset_name="move_onset_time",
+        win_start_offset=0,  # ms
+        win_end_offset=0,  # ms
+        threshold=0.15,
+        ignored_trials=None,
+    ):
+        """Calculates movement onset by finding peak in search window.
+        Then a threshold is set based on percentage of peak.
+        Crossing point is set as movement onset.
+        Calculated forwards from search start and backwards from peak to
+        ensure consistent calculation.
+
+        Parameters
+        ----------
+        move_field: str
+            The data field used to calculate onset times.
+        start_field: str
+            The field name of the start of the window to consider.
+        win_start_offset: float,
+            The number of ms after start_field to start movement onset search
+        win_end_offset: float
+            The number of ms after start_field to end movement onset search
+        onset_name: str
+            The name of the new movement onset trial_info field.
+        onset_threshold: float
+            The percentage of the max move field to compute onset.
+        ignored_trials: pd.Series
+            The trials to ignore for this calculation.
+
+              |xxxxxx   entire length of trial  xxxxxxxxxxx|
+              |      |==search for move onset==|           |
+              |      |                         |           |
+        start_field  |                         |           end_field
+                     win_start_offset           win_end_offset
+              |======|
+              |================================|
+        """
+        # Ignore trials that don't have the required fields
+        ti = self.trial_info
+        if ignored_trials is None:
+            ignored_trials == pd.Series(False, index=ti.index)
+        ignored_trials = ti[start_field].isnull() | ignored_trials
+
+        # Make trials to get rid of unneeded data
+        trial_data = self.make_trial_data(ignored_trials=ignored_trials)
+
+        # Keep a copy of the grouped movement data
+        if type(trial_data[move_field]) is pd.DataFrame:
+            new_move_field = "norm_" + move_field
+            trial_data[new_move_field] = trial_data[move_field].apply(
+                lambda x: np.linalg.norm(x), axis=1
+            )
+            move_field = new_move_field
+        grouped_md = trial_data[["trial_id", move_field]].groupby("trial_id")
+        # Convert offsets to timedeltas
+        start_offset_td = pd.to_timedelta(win_start_offset, unit="ms")
+        end_offset_td = pd.to_timedelta(win_end_offset, unit="ms")
+        # Format start and end times for each trial to match trial_data
+        td = trial_data
+        ti_broadcast = ti.loc[td.trial_id]
+        ti_broadcast = ti_broadcast.set_index(td.index)
+
+        window_start = getattr(ti_broadcast, start_field)
+        # window_end = getattr(ti_broadcast, end_field)
+
+        # define search window for move onset
+        search_start = window_start + start_offset_td
+        search_end = window_start + end_offset_td
+
+        # check whether search windows are valid clock times
+        valid_range = (search_start < td.clock_time) & (search_end > td.clock_time)
+
+        # find max speed for each trial
+
+        max_speed = grouped_md[move_field].max()
+        # broadcast max speed and convert index to match trial data
+        max_speed_broadcast = max_speed.loc[td.trial_id]
+        max_speed_broadcast = max_speed_broadcast.to_frame().set_index(td.index)
+
+        # calculate threshold for move onset
+        threshold_broadcast = max_speed_broadcast * threshold
+
+        m = td[move_field]
+
+        # if multi-dimensional, compute norm to calculate onset
+        if type(m) is pd.DataFrame:
+            m = m.apply(lambda x: np.linalg(x), axis=1)
+
+        # find threshold crossings (negative to positive)
+        crossings = m - threshold_broadcast.squeeze()
+        onsets = (crossings < 0) & (crossings.shift(-1) > 0)
+
+        valid_onsets = onsets & valid_range
+
+        onset_ixs = valid_onsets.groupby(td.trial_id).idxmax()
+        n_onset = len(onset_ixs)
+
+        logger.info(f"Move onset calculated on {n_onset} trials.")
+
+        onset_times = td.loc[onset_ixs].clock_time
+        onset_times.index = onset_ixs.index
+        self.trial_info[onset_name] = onset_times
+
     def calculate_onset(
         self,
         field_name,
@@ -496,16 +613,25 @@ class BaseDataset(ABC):
 
     def make_trial_data(
         self,
+        start_field="start_time",
+        end_field="end_time",
         align_field=None,
         align_range=(None, None),
         margin=0,
         ignored_trials=None,
         allow_overlap=False,
+        allow_nans=False,
     ):
         """Makes a DataFrame of trialized data based on
         an alignment field.
         Parameters
         ----------
+        start_field : str, optional
+            The field in `trial_info` to use as the beginning of
+            each trial, by default 'start_time'
+        end_field : str, optional
+            The field in `trial_info` to use as the end of each trial,
+            by default 'end_time'
         align_field : str, optional
             The field in `trial_info` to use for alignment,
             by default None uses `trial_start` and `trial_end`.
@@ -526,6 +652,10 @@ class BaseDataset(ABC):
             Whether to allow overlap between trials, by default False
             truncates each trial at the end of the previous trial and
             the start of the subsequent trial.
+        allow_nans : bool, optional
+            Whether to allow NaNs within trials, by default False
+            drops all timestamps containing NaNs in any column
+
         Returns
         -------
         pd.DataFrame
@@ -537,27 +667,45 @@ class BaseDataset(ABC):
             various fields across trials, aligned relative to
             `align_time`, `trial_time`, or `clock_time`.
         """
+        # Allow rejection of trials by passing a boolean series
+        trial_info = self.trial_info.copy()
+        trial_info["next_start"] = trial_info["start_time"].shift(-1)
 
         # Allow rejection of trials by passing a boolean series
         if ignored_trials is not None:
-            trial_info = self.trial_info.loc[~ignored_trials]
-        else:
-            trial_info = self.trial_info
+            trial_info = trial_info.loc[~ignored_trials]
+        if len(trial_info) == 0:
+            logger.warning("All trials ignored. No trial data made")
+            return
 
         # Find alignment points
-        trial_start = trial_info["start_time"]
-        trial_end = trial_info["end_time"]
-        bin_width = pd.to_timedelta(self.bin_width, unit="s")
+        bin_width = pd.to_timedelta(self.bin_width, unit="ms")
+        trial_start = trial_info["start_time"].dt.round(bin_width)
+        trial_end = trial_info["end_time"].dt.round(bin_width)
+        # next_start = trial_info["next_start"]
         if align_field is not None:
             align_points = trial_info[align_field].dt.round(bin_width)
             align_left = align_right = align_points
         else:
-            align_field = "start and end"
+            align_field = f"{start_field} and {end_field}"  # for logging
             align_left = trial_start
             align_right = trial_end
 
         # Find start and end points based on the alignment range
         start_offset, end_offset = pd.to_timedelta(align_range, unit="ms")
+        if not pd.isnull(start_offset) and not pd.isnull(end_offset):
+            if not ((end_offset - start_offset) / bin_width).is_integer():
+                # Round align offsets if alignment range is not multiple of bin width
+                end_offset = start_offset + (end_offset - start_offset).round(bin_width)
+                align_range = (
+                    int(round(start_offset.total_seconds() * 1000)),
+                    int(round(end_offset.total_seconds() * 1000)),
+                )
+                logger.warning(
+                    "Alignment window not integer multiple of bin width. "
+                    f"Rounded to {align_range}"
+                )
+
         if pd.isnull(start_offset):
             align_start = trial_start
         else:
@@ -572,9 +720,11 @@ class BaseDataset(ABC):
         margin_start = align_start - margin_delta
         margin_end = align_end + margin_delta
 
+        trial_ids = trial_info["trial_id"]
         # Store the alignment data in a dataframe
         align_data = pd.DataFrame(
             {
+                "trial_id": trial_ids,
                 "margin_start": margin_start,
                 "margin_end": margin_end,
                 "align_start": align_start,
@@ -589,31 +739,45 @@ class BaseDataset(ABC):
         )
         trial_dfs = []
         num_overlap_trials = 0
-        for trial_id, row in align_data.iterrows():
+
+        def make_trial_df(args):
+            idx, row = args
             # Handle overlap with the start of the next trial
             endpoint = row.margin_end
+            trial_id = row.trial_id
+            overlap = False
             if not pd.isnull(row.end_bound) and row.align_end > row.end_bound:
 
-                num_overlap_trials += 1
+                overlap = True
                 if not allow_overlap:
                     # Allow overlapping margins, but not aligned data
-                    endpoint = row.end_bound + margin_delta
+                    endpoint = (
+                        row.end_bound + margin_delta - pd.to_timedelta(1, unit="us")
+                    )
             # Take a slice of the continuous data
-            trial_df = (
-                self.data.loc[row.margin_start : endpoint]
-                .iloc[:-1]  # Omit the last entry
-                .reset_index()  # Move clock_time to column
+            trial_idx = pd.Series(
+                self.data.index[
+                    self.data.index.slice_indexer(row.margin_start, endpoint)
+                ]
             )
             # Add trial identifiers
-            trial_df["trial_id"] = trial_id
-            # Add times to orient the trials
-            clock_time = trial_df["clock_time"]
-            trial_df["trial_time"] = clock_time - row.trial_start.ceil(bin_width)
-            trial_df["align_time"] = clock_time - row.align_left.ceil(bin_width)
-            trial_df["margin"] = (clock_time < row.align_start) | (
-                row.align_end < clock_time
+            trial_df = pd.DataFrame(
+                {
+                    ("trial_id", ""): np.repeat(trial_id, len(trial_idx)),
+                    ("trial_time", ""): (trial_idx - row.trial_start.ceil(bin_width)),
+                    ("align_time", ""): (trial_idx - row.align_left.ceil(bin_width)),
+                    ("margin", ""): (
+                        (trial_idx < row.align_start) | (row.align_end < trial_idx)
+                    ),
+                }
             )
-            trial_dfs.append(trial_df)
+            trial_df.index = trial_idx
+            return overlap, trial_df
+
+        overlaps, trial_dfs = zip(
+            *[make_trial_df(args) for args in align_data.iterrows()]
+        )
+        num_overlap_trials = sum(overlaps)
         # Summarize alignment
         logger.info(
             f"Aligned {len(trial_dfs)} trials to "
@@ -626,10 +790,14 @@ class BaseDataset(ABC):
                 logger.warning(f"Allowed {num_overlap_trials} overlapping trials.")
             else:
                 logger.warning(
-                    f"Shortened {num_overlap_trials} trials " "to prevent overlap."
+                    f"Shortened {num_overlap_trials} trials to prevent overlap."
                 )
         # Combine all trials into one DataFrame
-        trial_data = pd.concat(trial_dfs).reset_index(drop=True)
+        trial_data = pd.concat(trial_dfs)
+        trial_data.reset_index(inplace=True)
+        trial_data = trial_data.merge(
+            self.data, how="left", left_on=[("clock_time", "")], right_index=True
+        )
         # Sanity check to make sure there are no duplicated `clock_time`'s
         if not allow_overlap:
             # Duplicated points in the margins are allowed
@@ -637,17 +805,19 @@ class BaseDataset(ABC):
             assert (
                 td_nonmargin.clock_time.duplicated().sum() == 0
             ), "Duplicated points still found. Double-check overlap code."
-        # Make sure NaN's caused by adding trialized data to self.data
-        # are ignored
+        # Make sure NaN's caused by adding trialized data to self.data are ignored
         nans_found = trial_data.isnull().sum().max()
         if nans_found > 0:
             pct_nan = (nans_found / len(trial_data)) * 100
-            logger.warning(
-                f"NaNs found in `self.data`. Dropping {pct_nan:.2f}% "
-                "of points to remove NaNs from `trial_data`."
-            )
-            trial_data = trial_data.dropna()
-
+            if allow_nans:
+                logger.warning(f"NaNs found in {pct_nan:.2f}% of `trial_data`.")
+            else:
+                logger.warning(
+                    f"NaNs found in `self.data`. Dropping {pct_nan:.2f}% "
+                    "of points to remove NaNs from `trial_data`."
+                )
+                trial_data = trial_data.dropna()
+        trial_data.sort_index(axis=1, inplace=True)
         return trial_data
 
     def _make_midx(self, signal_type, chan_names=None, num_channels=None):
@@ -705,3 +875,97 @@ class BaseDataset(ABC):
         logger.info(f"Adding trialized {signal_type} to the main DataFrame")
         new_data = trial_data[["clock_time", signal_type]].set_index("clock_time")
         self.data = pd.concat([self.data, new_data], axis=1)
+
+
+class DataWrangler(object):
+    def __init__(self, dataset, trial_data=None):
+        # grouped trials
+        # self.grouped_trials = self.gt = grouped_trials
+        # self.groups = self.g = groups
+        # self.group_colors = self.gc = group_colors
+        self.dataset = self._d = dataset
+        # alias trial info
+        self._d.ti = self._d.trial_info
+        self.trial_dfs = {}
+        self._t_df = trial_data
+        self._pivot_index = self._pi = "align_time"
+        self._pivot_columns = self._pc = "trial_id"
+
+    def make_trial_data(self, name, *args, set_t_df=False, **kwargs):
+        """makes trial dataframe and adds to internal trial df dict"""
+        self.trial_dfs[name] = self._d.make_trial_data(*args, **kwargs)
+        if self._t_df is None or set_t_df:
+            logger.info(f"Setting {name} to trial_df")
+            self._t_df = self.trial_dfs[name]
+
+    def set_trial_data(self, name):
+        """sets internal trial dataframe for data wrangling"""
+        logger.info(f"Setting {name} to trial_df")
+        assert name in self.trial_dfs.keys()
+        self._t_df = self.trial_dfs[name]
+
+    def get_group_trial_ids(self, group_field, group):
+        """get trial ids for group"""
+
+        def default_list(x):
+            if type(x) != list:
+                return [x]
+            else:
+                return x
+
+        # default_list = lambda x: [x] if type(x) != list else x
+        group = default_list(group)
+        group_mask = self._d.ti[group_field].isin(group)
+        group_trial_ids = self._d.ti[group_mask].index
+
+        return group_trial_ids
+
+    def get_num_trials(self, group_field, group):
+        """get number of trials in group"""
+        gt_ix = self.get_group_trial_ids(group_field, group)
+        return len(gt_ix)
+
+    def get_group_data(self, group_field, group):
+        """get trial_data DataFrame for group"""
+        assert (
+            self._t_df is not None
+        ), "No trial dataframe. Need to call make_trial_data first."
+        group_trial_ids = self.get_group_trial_ids(group_field, group)
+
+        group_t_df = self._t_df[self._t_df.trial_id.isin(group_trial_ids)]
+
+        return group_t_df
+
+    def pivot_trial_df(self, t_df, values=None):
+        """pivot trial dataframe"""
+        if values is None:
+            return t_df.pivot(index=self._pi, columns=self._pc)
+        else:
+            return t_df.pivot(index=self._pi, columns=self._pc, values=values)
+
+    def select_group_data(
+        self,
+        group_field: str,
+        group: List[str],
+        data_col_name: str,
+        chan_col_names: List,
+    ):
+        """select group data for specific channels"""
+
+        def default_list(x):
+            if type(x) != list:
+                return [x]
+            else:
+                return x
+
+        # default_list = lambda x: [x] if type(x) != list else x
+        chan_col_names = default_list(chan_col_names)
+        group_t_df = self.get_group_data(group_field, group)
+
+        pivot_group_t_df = self.pivot_trial_df(group_t_df)
+        group_data_concat = pivot_group_t_df[data_col_name][chan_col_names]
+        group_data = np.stack(
+            np.split(group_data_concat.values, len(chan_col_names), axis=1)
+        )
+
+        return group_data
