@@ -219,11 +219,14 @@ class NWBDataset(BaseDataset):
                 index = ts.timestamps[()]
             else:
                 index = np.arange(ts.data.shape[0]) / ts.rate + ts.starting_time
+            # MR: Don't like that it assumes comments to have the column names
             columns = (
                 ts.comments.split("[")[-1].split("]")[0].split(",")
                 if "columns=" in ts.comments
                 else None
             )
+            if columns is None:
+                columns = [ts.name]
             if len(ts.data.shape) > 1:
                 base_column_name = columns[0]
                 columns = []
@@ -270,10 +273,17 @@ class NWBDataset(BaseDataset):
             bin_width = 1  # in ms, this will be the case for all provided datasets
             rate = round(1000.0 / bin_width, 2)  # in Hz
             # Use obs_intervals, or last trial to determine data end
-            end_time = (
-                round(max(units.obs_intervals.apply(lambda x: x[-1][-1])) * rate)
-                * bin_width
-            )
+            # ^ what if we don't have obs_intervals?
+            if hasattr(units, "obs_intervals"):
+                end_time = (
+                    round(max(units.obs_intervals.apply(lambda x: x[-1][-1])) * rate)
+                    * bin_width
+                )
+            else:
+                end_time = (
+                    max(units.spike_times.apply(lambda x: x[-1])) * rate * bin_width + 1
+                )
+
             if end_time < trial_info["end_time"].iloc[-1]:
                 print("obs_interval ends before trial end")  # TO REMOVE
                 end_time = round(trial_info["end_time"].iloc[-1] * rate) * bin_width
@@ -282,6 +292,7 @@ class NWBDataset(BaseDataset):
 
             # Check that all timeseries match with calculated timestamps
             for key, val in list(data_dict.items()):
+
                 if not np.all(
                     np.isin(np.round(val.index.total_seconds(), 6), timestamps)
                 ):
@@ -320,6 +331,7 @@ class NWBDataset(BaseDataset):
 
                 # Bin spikes using dec. trunc and np.unique
                 # - faster than np.histogram with same results
+
                 for idx, (_, unit) in enumerate(units[mask].iterrows()):
                     spike_idx, spike_cnt = np.unique(
                         ((unit.spike_times - timestamps[0]) * rate)

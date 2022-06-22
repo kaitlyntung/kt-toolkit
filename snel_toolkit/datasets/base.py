@@ -101,7 +101,7 @@ class BaseDataset(ABC):
             "Initialized `self.data` with " f"{n_rows} rows and {n_cols} columns."
         )
 
-    def resample(self, target_bin):
+    def resample(self, target_bin, average_continuous=False):
         """Rebins spikes and performs antialiasing + downsampling on
         continuous signals.
         Parameters
@@ -123,7 +123,8 @@ class BaseDataset(ABC):
             resample_factor.is_integer()
         ), "target_bin must be an integer multiple of bin_width."
 
-        # resamples the analog columns and rebins the spike columns
+        # rebins the spike columns and resamples the analog columns
+        # or averages values for bins if average_continuous=True
         def resample_column(x):
             # Always resample so we get the correct indices
             resamp = x.resample("{}S".format(target_bin / 1000)).sum()
@@ -132,11 +133,17 @@ class BaseDataset(ABC):
             # Replace values for non-spike columns
             signal_type = x.name[0]
             if "spikes" not in signal_type:
-                # Apply order 500 Chebychev filter and then downsample
-                decimated_x = signal.decimate(
-                    x, int(resample_factor), n=500, ftype="fir"
-                )
-                resamp = pd.Series(decimated_x, index=resamp.index)
+                if average_continuous:
+                    # Always resample so we get the correct indices
+                    resamp = x.resample("{}S".format(target_bin / 1000)).mean()
+                    # Make sure `resample` output has same length as decimate
+                    resamp = resamp[: int(np.ceil(len(x) / resample_factor))]
+                else:
+                    # Apply order 500 Chebychev filter and then downsample
+                    decimated_x = signal.decimate(
+                        x, int(resample_factor), n=500, ftype="fir"
+                    )
+                    resamp = pd.Series(decimated_x, index=resamp.index)
             return resamp
 
         # replace data with the resampled data
@@ -798,6 +805,7 @@ class BaseDataset(ABC):
         trial_data = trial_data.merge(
             self.data, how="left", left_on=[("clock_time", "")], right_index=True
         )
+
         # Sanity check to make sure there are no duplicated `clock_time`'s
         if not allow_overlap:
             # Duplicated points in the margins are allowed
