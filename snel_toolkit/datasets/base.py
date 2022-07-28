@@ -127,7 +127,7 @@ class BaseDataset(ABC):
         # or averages values for bins if average_continuous=True
         def resample_column(x):
             # Always resample so we get the correct indices
-            resamp = x.resample("{}S".format(target_bin / 1000)).sum()
+            resamp = x.resample("{}S".format(target_bin)).sum()
             # Make sure `resample` output has same length as decimate
             resamp = resamp[: int(np.ceil(len(x) / resample_factor))]
             # Replace values for non-spike columns
@@ -135,7 +135,7 @@ class BaseDataset(ABC):
             if "spikes" not in signal_type:
                 if average_continuous:
                     # Always resample so we get the correct indices
-                    resamp = x.resample("{}S".format(target_bin / 1000)).mean()
+                    resamp = x.resample("{}S".format(target_bin)).mean()
                     # Make sure `resample` output has same length as decimate
                     resamp = resamp[: int(np.ceil(len(x) / resample_factor))]
                 else:
