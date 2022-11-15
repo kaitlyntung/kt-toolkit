@@ -1,10 +1,9 @@
-# A generalized dataset for working with data in NWB format. Adapted from
+# A generalized dataset for working with BRAND exported data in NWB format. Adapted from
 # https://github.com/neurallatents/nlb_tools/blob/main/nlb_tools/nwb_interface.py
 # Original author: Felix Pei
 # and
 # https://github.com/snel-repo/snel-toolkit/blob/nlb_tools/snel_toolkit/datasets/nlb.py
 # Original author: Andrew Sedler
-
 
 import logging
 import os
@@ -18,17 +17,6 @@ from pynwb.core import MultiContainerInterface
 from .base import BaseDataset
 
 logger = logging.getLogger(__name__)
-
-DATA_PATHS = {
-    "mc_maze": "/snel/share/data/dandi/000128/sub-Jenkins",
-    "mc_rtt": "/snel/share/data/dandi/000129/sub-Indy",
-    "area2_bump": "/snel/share/data/dandi/000127/sub-Han",
-    "dmfc_rsg": "/snel/share/data/dandi/000130/sub-Haydn",
-    "mc_maze_large": "/snel/share/data/dandi/000138/sub-Jenkins",
-    "mc_maze_medium": "/snel/share/data/dandi/000139/sub-Jenkins",
-    "mc_maze_small": "/snel/share/data/dandi/000140/sub-Jenkins",
-}
-
 
 class BRANDDataset(BaseDataset):
     """A class for loading/preprocessing data from NWB files. Can also be used for
@@ -194,11 +182,6 @@ class BRANDDataset(BaseDataset):
             self.unit_info = unit_info
         else:
             has_units = False
-            acq_key = list(nwbfile.acquisition.keys())[0]
-            name_key = list(nwbfile.acquisition[acq_key].time_series.keys())[0]
-            dt_s = np.diff(nwbfile.acquisition[acq_key][name_key].timestamps).round(4)
-            print("line 203")
-            bin_width = np.unique(dt_s)[0]
 
         # Load descriptions of trial info fields
         descriptions = {}
@@ -220,16 +203,14 @@ class BRANDDataset(BaseDataset):
             )
             if columns is None:
                 columns = [ts.name]
-            if len(ts.data.shape) > 1:
+            if ts.data.shape[1] > 1 and len(columns) <= 1:
                 base_column_name = columns[0]
                 columns = []
                 for i in range(ts.data.shape[1]):
-                    columns.append(base_column_name + "_" + str(i))
-
+                    columns.append(i)
             df = pd.DataFrame(
                 ts.data[()], index=pd.to_timedelta(index, unit="s"), columns=columns
             )
-
             return df
 
         def find_timeseries(nwbobj):
@@ -260,24 +241,14 @@ class BRANDDataset(BaseDataset):
         # Create a dictionary containing DataFrames for all time series
         data_dict = find_timeseries(nwbfile)
 
+        # Find min and max timestamps, and highest frequency sampling rate
+        start_time = min(data_dict[field].index.total_seconds().values[0] for field in data_dict)
+        end_time = max(data_dict[field].index.total_seconds().values[-1] for field in data_dict)
+        bin_width = min(min(np.diff(data_dict[field].index.total_seconds().values)) for field in data_dict)
+        bin_width = round(bin_width, 3) # round to nearest millisecond
+        rate = round(1.0 / bin_width, 2)  # in Hz           
+
         if has_units:
-            # Calculate data index
-            start_time = 0.0
-            bin_width = 0.001  # in sec, this will be the case for all provided datasets
-            rate = round(1.0 / bin_width, 2)  # in Hz
-            # Use obs_intervals, or last trial to determine data end
-            # ^ what if we don't have obs_intervals?
-            if hasattr(units, "obs_intervals"):
-                end_time = round(
-                    max(units.obs_intervals.apply(lambda x: x[-1][-1])) * rate
-                ) * (bin_width * 1000)
-            else:
-                end_time = (
-                    max(units.spike_times.apply(lambda x: x[-1]))
-                    * rate
-                    * (bin_width * 1000)
-                    + 1
-                )
 
             if end_time < trial_info["end_time"].iloc[-1]:
                 print("obs_interval ends before trial end")  # TO REMOVE
@@ -285,7 +256,7 @@ class BRANDDataset(BaseDataset):
                     bin_width * 1000
                 )
             timestamps = (
-                np.arange(start_time, end_time, (bin_width * 1000)) / 1000
+                np.arange(start_time, end_time+bin_width, bin_width)
             ).round(6)
             timestamps_td = pd.to_timedelta(timestamps, unit="s")
 
