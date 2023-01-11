@@ -18,6 +18,7 @@ from .base import BaseDataset
 
 logger = logging.getLogger(__name__)
 
+
 class BRANDDataset(BaseDataset):
     """A class for loading/preprocessing data from NWB files. Can also be used for
     loading the NLB competition datasets.
@@ -204,12 +205,13 @@ class BRANDDataset(BaseDataset):
             if columns is None:
                 columns = [ts.name]
             if ts.data.shape[1] > 1 and len(columns) <= 1:
-                base_column_name = columns[0]
                 columns = []
                 for i in range(ts.data.shape[1]):
                     columns.append(i)
             df = pd.DataFrame(
-                ts.data[()], index=pd.to_timedelta(index, unit="s"), columns=columns
+                ts.data[()],
+                index=pd.to_timedelta(index.round(6), unit="s"),
+                columns=columns,
             )
             return df
 
@@ -242,11 +244,18 @@ class BRANDDataset(BaseDataset):
         data_dict = find_timeseries(nwbfile)
 
         # Find min and max timestamps, and highest frequency sampling rate
-        start_time = min(data_dict[field].index.total_seconds().values[0] for field in data_dict)
-        end_time = max(data_dict[field].index.total_seconds().values[-1] for field in data_dict)
-        bin_width = min(min(np.diff(data_dict[field].index.total_seconds().values)) for field in data_dict)
-        bin_width = round(bin_width, 3) # round to nearest millisecond
-        rate = round(1.0 / bin_width, 2)  # in Hz           
+        start_time = min(
+            data_dict[field].index.total_seconds().values[0] for field in data_dict
+        )
+        end_time = max(
+            data_dict[field].index.total_seconds().values[-1] for field in data_dict
+        )
+        bin_width = min(
+            min(np.diff(data_dict[field].index.total_seconds().values))
+            for field in data_dict
+        )
+        bin_width = round(bin_width, 3)  # round to nearest millisecond
+        rate = round(1.0 / bin_width, 2)  # in Hz
 
         if has_units:
 
@@ -255,9 +264,9 @@ class BRANDDataset(BaseDataset):
                 end_time = round(trial_info["end_time"].iloc[-1] * rate) * (
                     bin_width * 1000
                 )
-            timestamps = (
-                np.arange(start_time, end_time+bin_width, bin_width)
-            ).round(6)
+            timestamps = (np.arange(start_time, end_time + bin_width, bin_width)).round(
+                6
+            )
             timestamps_td = pd.to_timedelta(timestamps, unit="s")
 
             # Check that all timeseries match with calculated timestamps
