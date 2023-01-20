@@ -1,3 +1,4 @@
+import copy
 import logging
 from abc import ABC, abstractmethod
 from typing import List
@@ -364,10 +365,11 @@ class BaseDataset(ABC):
         corr_list = parmap(xcorr_func, pairs)
 
         pair_corr = zip(pairs, corr_list)
+        pair_corr = list(pair_corr)
 
         chan_names_to_drop = []
         if threshold:
-            pair_corr_tmp = list(pair_corr)  # create a copy
+            pair_corr_tmp = copy.deepcopy(pair_corr)  # create a copy
             if removal == "corr":
                 # sort pairs based on the xcorr values
                 pair_corr_tmp.sort(key=lambda x: x[1], reverse=False)
@@ -376,8 +378,8 @@ class BaseDataset(ABC):
                     if corr > threshold:
                         # get corr for all the other pairs which include the
                         # neurons from this pair
-                        c1 = [p[1] for p in pair_corr if pair[0] in p[0]]
-                        c2 = [p[1] for p in pair_corr if pair[1] in p[0]]
+                        c1 = [p[1] for p in pair_corr_tmp if pair[0] in p[0]]
+                        c2 = [p[1] for p in pair_corr_tmp if pair[1] in p[0]]
                         cnt1 = sum(1 for c in c1 if c > threshold)
                         cnt2 = sum(1 for c in c2 if c > threshold)
                         # determine which channel has more number of
