@@ -250,7 +250,7 @@ class BRANDDataset(BaseDataset):
             data_dict[field].index.total_seconds().values[-1] for field in data_dict
         )
         bin_width = min(
-            np.median(np.round(np.diff(data_dict[field].index.total_seconds().values),3))
+            np.median(np.diff(data_dict[field].index.total_seconds().values).round(3))
             for field in data_dict
         )
         for field in data_dict:
