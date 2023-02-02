@@ -18,7 +18,6 @@ from .base import BaseDataset
 
 logger = logging.getLogger(__name__)
 
-
 class BRANDDataset(BaseDataset):
     """A class for loading/preprocessing data from NWB files. Can also be used for
     loading the NLB competition datasets.
@@ -251,9 +250,14 @@ class BRANDDataset(BaseDataset):
             data_dict[field].index.total_seconds().values[-1] for field in data_dict
         )
         bin_width = min(
-            min(np.diff(data_dict[field].index.total_seconds().values))
+            np.median(np.diff(data_dict[field].index.total_seconds().values).round(3))
             for field in data_dict
         )
+        for field in data_dict:
+            field_med_ts = np.median(np.diff(data_dict[field].index.total_seconds().values).round(3))
+            field_min_ts = np.min(np.diff(data_dict[field].index.total_seconds().values).round(3))
+            if field_min_ts < field_med_ts:
+                logger.warning(f"Minimum difference in timestamps ({field_min_ts}) is smaller than median ({field_med_ts}) for TimeSeries {field}.")
         bin_width = round(bin_width, 3)  # round to nearest millisecond
         rate = round(1.0 / bin_width, 2)  # in Hz
 
@@ -357,3 +361,18 @@ class BRANDDataset(BaseDataset):
         io.close()
 
         return data, trial_info, descriptions, bin_width
+
+    def keep_fields(self, fields):
+        """Remove everything other than fields from `self.data`."""
+
+        fields_current = list(self.data.columns.get_level_values(0).unique())
+        fields_remove = list(set(fields_current)-set(fields))
+        
+        logger.info(f'Removing {fields_remove} field(s) from dataset.')
+        self.data.drop(columns=fields_remove, inplace=True)
+
+    def remove_fields(self, fields):
+        """Remove fields from `self.data`."""
+        
+        logger.info(f'Removing {fields} field(s) from dataset.')
+        self.data.drop(columns=fields, inplace=True)
