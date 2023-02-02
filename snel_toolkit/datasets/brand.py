@@ -18,6 +18,7 @@ from .base import BaseDataset
 
 logger = logging.getLogger(__name__)
 
+
 class BRANDDataset(BaseDataset):
     """A class for loading/preprocessing data from NWB files. Can also be used for
     loading the NLB competition datasets.
@@ -67,6 +68,7 @@ class BRANDDataset(BaseDataset):
                 f"No matching files with prefix {prefix} found in directory {fpath}"
             )
         # If multiple files found
+        # (this is untested, haven't deviated from original NWB code)
         elif len(filenames) > 1:
             loaded = [
                 self.load(fname, split_heldout=split_heldout, skip_fields=skip_fields)
@@ -124,13 +126,28 @@ class BRANDDataset(BaseDataset):
             self.data.index.name = "clock_time"
         # If single file found
         else:
-            data, trial_info, descriptions, bin_width = self.load(
+            dataframes, trial_info, descriptions, bin_widths = self.load(
                 filenames[0], split_heldout=split_heldout
             )
-            self.data = data
+            self.dataframes = dataframes
             self.trial_info = trial_info
             self.descriptions = descriptions
-            self.bin_width = bin_width
+            self.bin_widths = bin_widths
+
+            default_rate = max(list(key for key in self.dataframes.keys()))
+            self.data = self.dataframes[default_rate]
+            self.bin_width = self.bin_widths[default_rate]
+
+            logger.info(
+                f"self.data is pointing to dataframe sampled at {default_rate} Hz. "
+                f"Pointer can be changed by calling: 'select_data(rate)'"
+            )
+
+    def select_data(self, rate):
+        # TODO: add error if key not in dict
+        logger.info(f"self.data set to to dataframe sampled at {rate} Hz.")
+        self.data = self.dataframes[rate]
+        self.bin_width = self.bin_widths[rate]
 
     def load(self, fpath, split_heldout=False, skip_fields=[]):
         """Loads data from an NWB file into two dataframes,
@@ -217,12 +234,21 @@ class BRANDDataset(BaseDataset):
         def find_timeseries(nwbobj):
             """Recursively searches the NWB file for time series data"""
             ts_dict = {}
+            bin_widths = {}
+            rates = {}
             for child in nwbobj.children:
                 if isinstance(child, TimeSeries):
                     if child.name in skip_fields:
                         continue
                     ts_dict[child.name] = make_df(child)
                     descriptions[child.name] = child.description
+                    # replace below with field from NWB
+                    bin_widths[child.name] = np.median(
+                        np.diff(ts_dict[child.name].index.total_seconds().values).round(
+                            3
+                        )
+                    )
+                    rates[child.name] = (1 / bin_widths[child.name]).round(3)
                 elif isinstance(child, ProcessingModule):
                     pm_dict = find_timeseries(child)
                     ts_dict.update(pm_dict)
@@ -234,119 +260,151 @@ class BRANDDataset(BaseDataset):
                             if name in skip_fields:
                                 continue
                             ts_dfs.append(make_df(field))
-
                     ts_dict[name] = pd.concat(ts_dfs, axis=1)
                     descriptions[name] = field.description
-            return ts_dict
+                    # replace below with field from NWB
+                    bin_widths[name] = np.median(
+                        np.diff(ts_dict[name].index.total_seconds().values).round(3)
+                    )
+                    rates[name] = (1 / bin_widths[name]).round(3)
+            return ts_dict, bin_widths, rates
 
         # Create a dictionary containing DataFrames for all time series
-        data_dict = find_timeseries(nwbfile)
+        data_dict, bin_width_dict, rates_dict = find_timeseries(nwbfile)
 
-        # Find min and max timestamps, and highest frequency sampling rate
-        start_time = min(
-            data_dict[field].index.total_seconds().values[0] for field in data_dict
-        )
-        end_time = max(
-            data_dict[field].index.total_seconds().values[-1] for field in data_dict
-        )
-        bin_width = min(
-            np.median(np.diff(data_dict[field].index.total_seconds().values).round(3))
-            for field in data_dict
-        )
-        for field in data_dict:
-            field_med_ts = np.median(np.diff(data_dict[field].index.total_seconds().values).round(3))
-            field_min_ts = np.min(np.diff(data_dict[field].index.total_seconds().values).round(3))
-            if field_min_ts < field_med_ts:
-                logger.warning(f"Minimum difference in timestamps ({field_min_ts}) is smaller than median ({field_med_ts}) for TimeSeries {field}.")
-        bin_width = round(bin_width, 3)  # round to nearest millisecond
-        rate = round(1.0 / bin_width, 2)  # in Hz
+        dataframes = {}
+        bin_widths = {}
 
-        if has_units:
+        # Extract unique values from bin_width_dict
+        rate_list = list(set(rates_dict.values()))
 
-            if end_time < trial_info["end_time"].iloc[-1]:
-                print("obs_interval ends before trial end")  # TO REMOVE
-                end_time = round(trial_info["end_time"].iloc[-1] * rate) * (
-                    bin_width * 1000
+        for rate in rate_list:
+
+            # Get keys for TimeSeries in dict corresponding to current rate
+            rate_keys = [key for key, value in rates_dict.items() if value == rate]
+
+            # Extract dict only with keys corresponding to bin width
+            rate_data_dict = {
+                key: value for key, value in data_dict.items() if key in rate_keys
+            }
+
+            bin_width = (1 / rate).round(3)
+            bin_widths[rate] = bin_width
+
+            for field in rate_data_dict:
+                field_min_ts = np.min(
+                    np.diff(rate_data_dict[field].index.total_seconds().values).round(3)
                 )
-            timestamps = (np.arange(start_time, end_time + bin_width, bin_width)).round(
-                6
-            )
-            timestamps_td = pd.to_timedelta(timestamps, unit="s")
-
-            # Check that all timeseries match with calculated timestamps
-            for key, val in list(data_dict.items()):
-
-                if not np.all(
-                    np.isin(np.round(val.index.total_seconds(), 6), timestamps)
-                ):
-                    logger.warning(f"Dropping {key} due to timestamp mismatch.")
-                    data_dict.pop(key)
-
-            def make_mask(obs_intervals):
-                """Creates bool mask to indicate when spk data not in obs_intervals"""
-                mask = np.full(timestamps.shape, True)
-                for start, end in obs_intervals:
-                    start_idx = np.ceil(
-                        round((start - timestamps[0]) * rate, 6)
-                    ).astype(int)
-                    end_idx = np.floor(round((end - timestamps[0]) * rate, 6)).astype(
-                        int
+                if field_min_ts < bin_width:
+                    logger.warning(
+                        f"Minimum difference in timestamps ({field_min_ts}) is smaller "
+                        f"than bin width ({bin_width}) for TimeSeries {field}."
                     )
-                    mask[start_idx:end_idx] = False
-                return mask
 
-            # Prepare variables for spike binning
-            masks = (
-                [(~units.heldout).to_numpy(), units.heldout.to_numpy()]
-                if split_heldout
-                else [np.full(len(units), True)]
-            )
+            # Only load units into the 1ms/1kHz Dataframe
+            if rate == 1000 and has_units:
 
-            for mask, name in zip(masks, ["spikes", "heldout_spikes"]):
-                # Check if there are any units
-                if not np.any(mask):
-                    continue
+                # Find min and max timestamps
+                start_time = min(
+                    data_dict[field].index.total_seconds().values[0]
+                    for field in rate_keys
+                ).round(3)
+                end_time = max(
+                    data_dict[field].index.total_seconds().values[-1]
+                    for field in rate_keys
+                ).round(3)
 
-                # Allocate array to fill with spikes
-                spike_arr = np.full(
-                    (len(timestamps), np.sum(mask)), 0.0, dtype="float16"
+                if end_time < trial_info["end_time"].iloc[-1]:
+                    print("obs_interval ends before trial end")  # TO REMOVE
+                    end_time = trial_info["end_time"].iloc[-1].round(3)
+
+                timestamps = (
+                    np.arange(start_time, end_time + bin_width, bin_width)
+                ).round(3)
+                timestamps_td = pd.to_timedelta(timestamps, unit="s")
+
+                # Check that all timeseries match with calculated timestamps
+                for key, val in list(rate_data_dict.items()):
+
+                    if not np.all(
+                        np.isin(np.round(val.index.total_seconds(), 6), timestamps)
+                    ):
+                        logger.warning(f"Dropping {key} due to timestamp mismatch.")
+                        rate_data_dict.pop(key)
+
+                def make_mask(obs_intervals):
+                    """
+                    Creates bool mask to indicate when spk data not in obs_intervals
+                    """
+                    mask = np.full(timestamps.shape, True)
+                    for start, end in obs_intervals:
+                        start_idx = np.ceil(
+                            round((start - timestamps[0]) * rate, 6)
+                        ).astype(int)
+                        end_idx = np.floor(
+                            round((end - timestamps[0]) * rate, 6)
+                        ).astype(int)
+                        mask[start_idx:end_idx] = False
+                    return mask
+
+                # Prepare variables for spike binning
+                masks = (
+                    [(~units.heldout).to_numpy(), units.heldout.to_numpy()]
+                    if split_heldout
+                    else [np.full(len(units), True)]
                 )
 
-                # Bin spikes using dec. trunc and np.unique
-                # - faster than np.histogram with same results
+                for mask, name in zip(masks, ["spikes", "heldout_spikes"]):
+                    # Check if there are any units
+                    if not np.any(mask):
+                        continue
 
-                for idx, (_, unit) in enumerate(units[mask].iterrows()):
-                    spike_idx, spike_cnt = np.unique(
-                        ((unit.spike_times - timestamps[0]) * rate)
-                        .round(6)
-                        .astype(int),
-                        return_counts=True,
+                    # Allocate array to fill with spikes
+                    spike_arr = np.full(
+                        (len(timestamps), np.sum(mask)), 0.0, dtype="float16"
                     )
-                    spike_arr[spike_idx, idx] = spike_cnt
 
-                # Replace invalid intervals in spike recordings with NaNs
-                if "obs_intervals" in units.columns:
-                    neur_mask = make_mask(units[mask].iloc[0].obs_intervals)
-                    if np.any(spike_arr[neur_mask]):
-                        logger.warning("Spikes found outside of observed interval.")
-                    spike_arr[neur_mask] = np.nan
-                # Create DataFrames with spike arrays
-                data_dict[name] = pd.DataFrame(
-                    spike_arr, index=timestamps_td, columns=units[mask].index
-                ).astype("float64", copy=False)
+                    # Bin spikes using dec. trunc and np.unique
+                    # - faster than np.histogram with same results
 
-        # Create MultiIndex column names
-        data_list = []
-        for key, val in data_dict.items():
-            chan_names = None if type(val.columns) == pd.RangeIndex else val.columns
-            val.columns = self._make_midx(
-                key, chan_names=chan_names, num_channels=val.shape[1]
-            )
-            data_list.append(val)
-        # Assign time-varying data to `self.data`
-        data = pd.concat(data_list, axis=1)
-        data.index.name = "clock_time"
-        data.sort_index(axis=1, inplace=True)
+                    for idx, (_, unit) in enumerate(units[mask].iterrows()):
+                        spike_idx, spike_cnt = np.unique(
+                            ((unit.spike_times - timestamps[0]) * rate)
+                            .round(6)
+                            .astype(int),
+                            return_counts=True,
+                        )
+                        spike_arr[spike_idx, idx] = spike_cnt
+
+                    # Replace invalid intervals in spike recordings with NaNs
+                    if "obs_intervals" in units.columns:
+                        neur_mask = make_mask(units[mask].iloc[0].obs_intervals)
+                        if np.any(spike_arr[neur_mask]):
+                            logger.warning("Spikes found outside of observed interval.")
+                        spike_arr[neur_mask] = np.nan
+                    # Create DataFrames with spike arrays
+                    rate_data_dict[name] = pd.DataFrame(
+                        spike_arr, index=timestamps_td, columns=units[mask].index
+                    ).astype("float64", copy=False)
+
+            # Create MultiIndex column names
+            data_list = []
+            for key, val in rate_data_dict.items():
+                chan_names = None if type(val.columns) == pd.RangeIndex else val.columns
+                val.columns = self._make_midx(
+                    key, chan_names=chan_names, num_channels=val.shape[1]
+                )
+                data_list.append(val)
+
+            # Assign time-varying data to `self.data`
+            dataframes[rate] = pd.concat(rate_data_dict, axis=1)
+            dataframes[rate].index.name = "clock_time"
+            dataframes[rate].sort_index(axis=1, inplace=True)
+
+        logger.info(
+            f"Created separate dataframes for data at following rates: "
+            f"{list(key for key in dataframes.keys())}"
+        )
 
         # Convert time fields in trial info to timedelta
         # and assign to `self.trial_info`
@@ -360,19 +418,19 @@ class BRANDDataset(BaseDataset):
 
         io.close()
 
-        return data, trial_info, descriptions, bin_width
+        return dataframes, trial_info, descriptions, bin_widths
 
     def keep_fields(self, fields):
         """Remove everything other than fields from `self.data`."""
 
         fields_current = list(self.data.columns.get_level_values(0).unique())
-        fields_remove = list(set(fields_current)-set(fields))
-        
-        logger.info(f'Removing {fields_remove} field(s) from dataset.')
+        fields_remove = list(set(fields_current) - set(fields))
+
+        logger.info(f"Removing {fields_remove} field(s) from dataset.")
         self.data.drop(columns=fields_remove, inplace=True)
 
     def remove_fields(self, fields):
         """Remove fields from `self.data`."""
-        
-        logger.info(f'Removing {fields} field(s) from dataset.')
+
+        logger.info(f"Removing {fields} field(s) from dataset.")
         self.data.drop(columns=fields, inplace=True)
