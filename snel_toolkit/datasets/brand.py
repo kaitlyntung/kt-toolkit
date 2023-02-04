@@ -324,15 +324,38 @@ class BRANDDatasetV2(BaseDataset):
             # Only load units into the 1ms/1kHz Dataframe
             if rate == 1000 and has_units:
 
-                # Find min and max timestamps
-                # Should replace with start/stop field from NWB.units instead
-                # of using the min and max
-                start_time = min(
-                    [min(units.spike_times[i]) for i in range(len(units.spike_times))]
-                ).round(3)
-                end_time = max(
-                    [max(units.spike_times[i]) for i in range(len(units.spike_times))]
-                ).round(3)
+                if "obs_intervals" in units.columns:
+                    # Find min and max unit ranges
+                    start_time = min(
+                        [
+                            units.obs_intervals[i].min()
+                            for i in range(len(units.obs_intervals))
+                        ]
+                    ).round(3)
+                    end_time = max(
+                        [
+                            units.obs_intervals[i].max()
+                            for i in range(len(units.obs_intervals))
+                        ]
+                    ).round(3)
+                else:
+                    logger.warning(
+                        "'obs_intervals' field not present for units data. Inferring "
+                        "min/max times from spike times."
+                    )
+                    # Find min and max spike times
+                    start_time = min(
+                        [
+                            min(units.spike_times[i])
+                            for i in range(len(units.spike_times))
+                        ]
+                    ).round(3)
+                    end_time = max(
+                        [
+                            max(units.spike_times[i])
+                            for i in range(len(units.spike_times))
+                        ]
+                    ).round(3)
 
                 # Checking if this is not needed anymore
                 # if end_time < trial_info["end_time"].iloc[-1]:
@@ -357,15 +380,17 @@ class BRANDDatasetV2(BaseDataset):
                     """
                     Creates bool mask to indicate when spk data not in obs_intervals
                     """
-                    mask = np.full(timestamps.shape, True)
-                    for start, end in obs_intervals:
+                    mask = np.full((timestamps.shape[0], obs_intervals.shape[0]), True)
+                    for chan_id, chan in enumerate(obs_intervals):
+                        start = chan.squeeze()[0]
+                        end = chan.squeeze()[-1]
                         start_idx = np.ceil(
-                            round((start - timestamps[0]) * rate, 6)
+                            round((start - timestamps[0]) * rate, 3)
                         ).astype(int)
                         end_idx = np.floor(
-                            round((end - timestamps[0]) * rate, 6)
+                            round((end - timestamps[0]) * rate, 3)
                         ).astype(int)
-                        mask[start_idx:end_idx] = False
+                        mask[start_idx : end_idx + 1, chan_id] = False
                     return mask
 
                 # Prepare variables for spike binning
@@ -398,7 +423,7 @@ class BRANDDatasetV2(BaseDataset):
 
                     # Replace invalid intervals in spike recordings with NaNs
                     if "obs_intervals" in units.columns:
-                        neur_mask = make_mask(units[mask].iloc[0].obs_intervals)
+                        neur_mask = make_mask(units[mask].obs_intervals)
                         if np.any(spike_arr[neur_mask]):
                             logger.warning("Spikes found outside of observed interval.")
                         spike_arr[neur_mask] = np.nan
