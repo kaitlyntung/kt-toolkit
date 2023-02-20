@@ -207,7 +207,8 @@ class BRANDDatasetV2(BaseDataset):
             ch_mask_bool = nwbfile.electrodes.to_dataframe()['mask'].values
             if ch_mask_bool.dtype is np.dtype(np.bool):
                 self.ch_mask = np.argwhere(ch_mask_bool).squeeze()
-                self.ch_unmask = np.argwhere(np.logical_not(ch_mask_bool)).squeeze()
+                self.ch_unmask = np.argwhere(np.logical_not(ch_mask_bool))
+                self.ch_unmask = self.ch_unmask.squeeze()
                 print(('Remove / Zero the following channels from '
                        "'binned_spikes_samples':\n"
                        f'{str(self.ch_unmask.reshape(-1).tolist())}'))
