@@ -201,6 +201,20 @@ class BRANDDatasetV2(BaseDataset):
         else:
             has_units = False
 
+        # Set channel mask
+        if 'mask' in nwbfile.electrodes.to_dataframe():
+            ch_mask = nwbfile.electrodes.to_dataframe()['mask'].values
+            ch_mask_bool = nwbfile.electrodes.to_dataframe()['mask'].values
+            if ch_mask_bool.dtype is np.dtype(np.bool):
+                self.ch_mask = np.argwhere(ch_mask_bool).squeeze()
+                self.ch_unmask = np.argwhere(np.logical_not(ch_mask_bool)).squeeze()
+                print(('Remove / Zero the following channels from '
+                       "'binned_spikes_samples':\n"
+                       f'{str(self.ch_unmask.reshape(-1).tolist())}'))
+                self.cols_to_rm = []
+                for c in self.ch_unmask:
+                    self.cols_to_rm.append(('spikes', c.item()))
+
         # Load descriptions of trial info fields
         descriptions = {}
         for name, info in zip(nwbfile.trials.colnames, nwbfile.trials.columns):
