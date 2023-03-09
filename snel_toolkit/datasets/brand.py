@@ -209,7 +209,7 @@ class BRANDDatasetV2(BaseDataset):
                 self.ch_mask = np.argwhere(ch_mask_bool).squeeze()
                 self.ch_unmask = np.argwhere(np.logical_not(ch_mask_bool))
                 self.ch_unmask = self.ch_unmask.squeeze()
-                print(('Remove or zero the following channels from '
+                print(('Remove / Zero the following channels from '
                        "'binned_spikes_samples':\n"
                        f'{str(self.ch_unmask.reshape(-1).tolist())}'))
                 self.cols_to_rm = []
@@ -475,10 +475,6 @@ class BRANDDatasetV2(BaseDataset):
                 return x
 
         trial_info = trial_info.apply(to_td, axis=0)
-
-        # Add seperate integer condition ID column (end target only)
-        trial_info['cond_id'] = [int(i.split('-')[1]) 
-                                 for i in trial_info['trial_info_cond_id']]
 
         io.close()
 
