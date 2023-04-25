@@ -51,6 +51,7 @@ class BRANDDatasetV2(BaseDataset):
             ignored
         """
         fpath = os.path.expanduser(fpath)
+        self.name = os.path.splitext(os.path.basename(fpath))[0]
         self.fpath = fpath
         self.prefix = prefix
         # Check if file/directory exists
@@ -200,6 +201,20 @@ class BRANDDatasetV2(BaseDataset):
             self.unit_info = unit_info
         else:
             has_units = False
+
+        # Set channel mask
+        self.cols_to_rm = []
+        if 'mask' in nwbfile.electrodes.to_dataframe():
+            ch_mask_bool = nwbfile.electrodes.to_dataframe()['mask'].values
+            if ch_mask_bool.dtype is np.dtype(np.bool):
+                self.ch_mask = np.argwhere(ch_mask_bool).squeeze()
+                self.ch_unmask = np.argwhere(np.logical_not(ch_mask_bool))
+                self.ch_unmask = self.ch_unmask.squeeze()
+                print(('Remove / Zero the following channels from '
+                       "'binned_spikes_samples':\n"
+                       f'{str(self.ch_unmask.reshape(-1).tolist())}'))
+                for c in self.ch_unmask:
+                    self.cols_to_rm.append(('spikes', c.item()))
 
         # Load descriptions of trial info fields
         descriptions = {}
@@ -643,6 +658,22 @@ class BRANDDataset(BaseDataset):
             self.unit_info = unit_info
         else:
             has_units = False
+
+        # Set channel mask
+        if 'mask' in nwbfile.electrodes.to_dataframe():
+            ch_mask_bool = nwbfile.electrodes.to_dataframe()['mask'].values
+            if ch_mask_bool.dtype is np.dtype(np.bool):
+                self.ch_mask = np.argwhere(ch_mask_bool).squeeze()
+                self.ch_unmask = np.argwhere(np.logical_not(ch_mask_bool))
+                self.ch_unmask = self.ch_unmask.squeeze()
+                print(('Remove / Zero the following channels from '
+                       "'binned_spikes_samples':\n"
+                       f'{str(self.ch_unmask.reshape(-1).tolist())}'))
+                self.cols_to_rm = []
+                for c in self.ch_unmask:
+                    self.cols_to_rm.append(('spikes', c.item()))
+        else:
+            self.cols_to_rm = []
 
         # Load descriptions of trial info fields
         descriptions = {}
