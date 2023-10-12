@@ -174,7 +174,7 @@ class LFADSInterface:
             return len(getattr(neural_df, field).columns)
 
         data_dims = [get_field_dim(f) for f in data_fields]
-        data_splits = data_dims[:-1]
+        data_splits = np.cumsum(data_dims)[:-1]
         input_fields = [fields_map[f] for f in data_fields]
         # Report information about the fields that are being chopped
         logger.info(
@@ -640,7 +640,7 @@ def merge_chops(data, overlap, orig_len=None, smooth_pwr=2):
         # Create x-values for the ramp
         x = np.linspace(1 / overlap, 1 - 1 / overlap, overlap)
         # Compute a power-function ramp to transition
-        ramp = 1 - x ** smooth_pwr
+        ramp = 1 - x**smooth_pwr
     else:
         # Use a placeholder ramp
         ramp = np.full(0, np.nan)
